@@ -13,9 +13,9 @@ Useless
 Gaussian process surrogates  
 Adaptive sampling  
 Latin hypercube sampling  
-Differential evolution MCMC
-MCMC R convergence analysis
-KDE posterior plotting
+Differential evolution MCMC  
+MCMC R convergence analysis  
+KDE posterior plotting  
 
 ### Future
 
