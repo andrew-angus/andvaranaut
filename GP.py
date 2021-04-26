@@ -2,8 +2,8 @@
 
 import GPy
 
-class gp():
-  def __init__(self,dat,kernel='Matern32'):
+class gp(surrogate):
+  def __init__(self):
     self.dat = dat
     self.kern = kernel
     self.nvars = dat.x.shape[1]
