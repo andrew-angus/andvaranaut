@@ -1,0 +1,29 @@
+#!/bin/python3
+
+from setuptools import setup,find_packages
+
+with open("README.md", "r") as fh:
+  long_description = fh.read()
+
+setup(
+  name="andvaranaut",
+  version="0.1.0",
+
+  author="Andrew Angus",
+  author_email="andrew.angus@warwick.ac.uk",
+
+  packages=find_packages(include=['andvaranaut','andvaranaut.*']),
+
+  url="https://github.com/andrewanguswarwick/andvaranaut",
+
+  description="Predictive modelling and UQ suite.",
+  long_description=long_description,
+  long_description_content_type="text/markdown",
+
+  install_requires=[
+    "GPy",
+    "numpy",
+    "scipy",
+    "py-design",
+    ],
+)

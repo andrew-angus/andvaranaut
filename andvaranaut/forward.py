@@ -1,19 +1,21 @@
 #!/bin/python3
 
 import numpy as np
-from py-design import latin_random
+from design import latin_random
+import GPy
 
+# Latin hypercube sampler and propagator
 class lhc():
-  # Initialise attributes
-  def __init__(self,nvars=None,dists=None,target=None):
-    self.nvars = nvars
-    self.dists = dists
-    # Converted x and y data
-    self.x = np.empty((0,nvars))
-    self.y = np.empty((0,1))
-    # Original x and y data
-    self.x0 = np.empty((0,nvars))
-    self.y0 = np.empty((0,1))
+  def __init__(self,nxvar=None,nyvar=None,dists=None,target=None):
+    # Check inputs
+    if nxvar is None:
+      raise Exception('Error: must specify number of input dimensions')
+    # Initialise attributes
+    self.nxvar = nxvar # Input dimensions
+    self.nyvar = nxvar # Output dimensions
+    self.dists = dists # Input distributions (must be scipy)
+    self.x = np.empty((0,nxvar))
+    self.y = np.empty((0,nyvar))
     # Target function which takes X and returns Y provided by user
     self.target = target
 
@@ -45,7 +47,7 @@ class lhc():
     self.__vector_solver(xsamps)
 
   # Sort samples into ordered form and delete by thinning evenly
-  def del_samples(self)
+  def del_samples(self):
     pass
 
   # Plot y distribution using kernel density estimation
@@ -69,3 +71,22 @@ class lhc():
     y_samps[nsamps:,:] = old_ysamps
     y_scaled = copy.deepcopy(y_samps)
     y_scaled = y_convert(y_scaled)
+
+# Inherit from LHC class and add data conversion methods
+class _surrogate(lhc):
+  def __init__(self):
+    pass
+
+# Inherit from surrogate class and add GP specific methods
+class gp(_surrogate):
+  def __init__(self):
+    self.dat = dat
+    self.kern = kernel
+    self.nvars = dat.x.shape[1]
+
+  def fit(self,restarts=3,noise=False):
+
+    kernel = 'GPy.kern.'+self.kern+f'(input_dim=)'
+    if self.kern == 'RBF':
+      kern = self.kern
+      #self.model = GPy.models.GPRegression(self.dat.x,self.dat.y,)
