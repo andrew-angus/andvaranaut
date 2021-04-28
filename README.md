@@ -12,7 +12,7 @@ To install run the following in the same directory as setup.py (can drop the --u
 
 ### Current
 
-Latin hypercube sampling
+Latin hypercube sampling  
 UQ forward propagation
 
 ### In Development
@@ -27,6 +27,6 @@ Advanced KDE posterior plotting
 
 Other MCMC methods  
 Marginal distributions  
-PCE surrogates
+PCE surrogates  
 
 ## Tutorial
