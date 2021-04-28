@@ -12,19 +12,21 @@ To install run the following in the same directory as setup.py (can drop the --u
 
 ### Current
 
-Useless
+Latin hypercube sampling
+UQ forward propagation
 
 ### In Development
 
 Gaussian process surrogates  
 Adaptive sampling  
-Latin hypercube sampling  
 Differential evolution MCMC  
 MCMC R convergence analysis  
-KDE posterior plotting  
+Advanced KDE posterior plotting  
 
 ### Future
 
 Other MCMC methods  
 Marginal distributions  
-PCE surrogates   
+PCE surrogates
+
+## Tutorial
