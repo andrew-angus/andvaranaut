@@ -2,9 +2,11 @@
 
 https://en.wikipedia.org/wiki/Andvaranaut  
 
-Predictive modelling and UQ suite. Use requires provision of function to produce input file from input array, run external code, and post-process to return quantity of interest. In addition probability distributions for input variables must be specified along with optional conversion methods (e.g bounded to unbounded range) for more efficient execution of available ML techniques.
+Predictive modelling and UQ suite. Use requires provision of function takes inputs and returns quantity of interest. In addition probability distributions (from scipy.stats) for input variables must be specified along with optional conversion methods (e.g bounded to unbounded range) for more efficient execution of available ML techniques.
 
-To use, clone repo and export andvaranaut folder to $PYTHON_PATH
+To install run the following in the same directory as setup.py (can drop the --user flag if root):  
+
+`pip install --user .`
 
 ## Functionality
 
@@ -25,15 +27,4 @@ KDE posterior plotting
 
 Other MCMC methods  
 Marginal distributions  
-PCE surrogates  
-
-## Dependencies
-
-GPy  
-numpy  
-py-design  
-ray  
-seaborn  
-scikit-learn  
-scipy  
-statsmodels  
+PCE surrogates   
