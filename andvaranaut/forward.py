@@ -10,30 +10,29 @@ import matplotlib.pyplot as plt
 
 # Latin hypercube sampler and propagator
 class lhc():
-  def __init__(self,nxvar=None,nyvar=None,dists=None,target=None):
+  def __init__(self,nx=None,ny=None,dists=None,target=None):
     # Check inputs
-    if (nxvar is None) or (nxvar < 1) or (not isinstance(nxvar,int)):
+    if (nx is None) or (nx < 1) or (not isinstance(nx,int)):
       raise Exception('Error: must specify an integer number of input dimensions > 0') 
-    if (nyvar is None) or (nyvar < 1) or (not isinstance(nyvar,int)):
+    if (ny is None) or (ny < 1) or (not isinstance(ny,int)):
       raise Exception('Error: must specify an integer number of output dimensions > 0') 
-    if (dists is None) or (len(dists) != nxvar):
+    if (dists is None) or (len(dists) != nx):
       raise Exception(\
-          'Error: must provide list of scipy.stats univariate distributions of length nxvar') 
+          'Error: must provide list of scipy.stats univariate distributions of length nx') 
     check = 'scipy.stats._distn_infrastructure'
     flags = [not getattr(i,'__module__',None)==check for i in dists]
     if any(flags):
       raise Exception(\
-          'Error: must provide list of scipy.stats univariate distributions of length nxvar') 
+          'Error: must provide list of scipy.stats univariate distributions of length nx') 
     if (target is None) or (not callable(target)):
       raise Exception(\
           'Error: must provide target function which produces output from specified inputs')
-    # !!! need additional test that function takes correct thing and returns correct thing
     # Initialise attributes
-    self.nxvar = nxvar # Input dimensions
-    self.nyvar = nyvar # Output dimensions
+    self.nx = nx # Input dimensions
+    self.ny = ny # Output dimensions
     self.dists = dists # Input distributions (must be scipy)
-    self.x = np.empty((0,nxvar))
-    self.y = np.empty((0,nyvar))
+    self.x = np.empty((0,nx))
+    self.y = np.empty((0,ny))
     # Target function which takes X and returns Y provided by user
     self.target = target
 
@@ -42,13 +41,22 @@ class lhc():
   def __vector_solver(self,xsamps):
     t0 = stopwatch()
     n_samples = len(xsamps)
-    ysamps = np.zeros((n_samples,self.nyvar))
+    ysamps = np.zeros((n_samples,self.ny))
     for i in range(n_samples):
-      ysamps[i,:] = self.target(xsamps[i,:])
+      try:
+        ysamps[i,:] = self.target(xsamps[i,:])
+      except:
+        self.x = np.r_[self.x,xsamps[:i,:]]
+        self.y = np.r_[self.y,ysamps[:i,:]]
+        errstr = f"Error: Target function evaluation failed at sample {i+1} "+\
+            "with xsamples: " +str(xsamps[i,:])+\
+            "\nCheck number of inputs/outputs is correct and range of input values valid."+\
+            f"\n{i} samples succesfully added to dataset."
+        raise Exception(errstr)
       print(f'Run is {(i+1)/n_samples:0.1%} complete.',end='\r')
     print('Run is 100.0% complete.')
     t1 = stopwatch()
-    print(f'Time taken: {t1-t0:0.3f} s')
+    print(f'Time taken: {t1-t0:0.1e} s')
 
     # Add new evaluations to original data arrays
     self.x = np.r_[self.x,xsamps]
@@ -56,10 +64,10 @@ class lhc():
 
   # Add n samples to current via latin hypercube sampling
   def sample(self,nsamps):
-    points = latin_random(nsamps,self.nxvar)
-    xsamps = np.zeros((nsamps,self.nxvar))
+    points = latin_random(nsamps,self.nx)
+    xsamps = np.zeros((nsamps,self.nx))
     for i in range(nsamps):
-      for j in range(self.nxvar):
+      for j in range(self.nx):
         xsamps[i,j] = self.dists[j].ppf(points[i,j])
     self.__vector_solver(xsamps)
 
@@ -75,13 +83,13 @@ class lhc():
 
   # Plot y distribution using kernel density estimation
   def y_dist(self):
-    if self.nyvar == 1:
+    if self.ny == 1:
       kdeplot(self.y[:,0])
       plt.xlabel('QoI')
       plt.ylabel('Density')
       plt.show()
     else:
-      for i in range(self.nyvar):
+      for i in range(self.ny):
         kdeplot(self.y[:,i])
         plt.xlabel(f'y[{i}]')
         plt.ylabel('Density')
