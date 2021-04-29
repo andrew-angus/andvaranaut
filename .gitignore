@@ -1,2 +1,5 @@
 andvaranaut.egg*
 __pycache__
+notebook.log
+*.swp
+*.nfs*
