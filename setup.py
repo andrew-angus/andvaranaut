@@ -25,5 +25,6 @@ setup(
     "numpy",
     "scipy",
     "py-design",
+    "ray",
     ],
 )
