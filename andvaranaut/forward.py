@@ -38,18 +38,28 @@ class lhc():
     self.target = target
 
   # Private method which takes array of x samples and evaluates y at each
-  # ToDo add parallel execution
   def __vector_solver(self,xsamps,parallel,nproc):
     t0 = stopwatch()
     if parallel:
-      ysamps = parallel_runs(self.target,xsamps,nproc)
+      # Parallel execution using utils.py
+      ysamps,fail = parallel_runs(self.target,xsamps,nproc)
+      assert ysamps.shape[1] == self.ny, "Specified ny does not match function output"
+      if fail > -1:
+        xsamps = xsamps[:fail]
     else:
+      # Serial execution
       n_samples = len(xsamps)
       ysamps = np.zeros((n_samples,self.ny))
       for i in range(n_samples):
         try:
-          ysamps[i,:] = self.target(xsamps[i,:])
+          yout = self.target(xsamps[i,:])
+          if isinstance(yout,np.ndarray):
+            assert len(yout) == self.ny
+          else:
+            assert self.ny == 1
+          ysamps[i,:] = yout
         except:
+          # If a sample evaluation fails still dump succesful samples
           self.x = np.r_[self.x,xsamps[:i,:]]
           self.y = np.r_[self.y,ysamps[:i,:]]
           errstr = f"Error: Target function evaluation failed at sample {i+1} "+\
@@ -60,7 +70,7 @@ class lhc():
         print(f'Run is {(i+1)/n_samples:0.1%} complete.',end='\r')
     print('Run is 100.0% complete.')
     t1 = stopwatch()
-    print(f'Time taken: {t1-t0:0.1e} s')
+    print(f'Time taken: {t1-t0:0.2f} s')
 
     # Add new evaluations to original data arrays
     self.x = np.r_[self.x,xsamps]
@@ -81,7 +91,7 @@ class lhc():
     current = len(self.x)
     left = current-nsamps
     a = np.arange(0,current)
-    inds = np.random.choice(a,size=left)
+    inds = np.random.choice(a,size=left,replace=False)
     self.x = self.x[inds,:]
     self.y = self.y[inds,:]
 

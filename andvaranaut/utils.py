@@ -29,9 +29,22 @@ def parallel_runs(func,inps,nps):
   os.system('mkdir parallel')
 
   # Run function in parallel    
-  ray.init(num_cpus=nps,log_to_driver=False)
+  ray.init(num_cpus=nps,log_to_driver=False,ignore_reinit_error=True)
   l = len(inps)
-  outs = ray.get([__parallel_wrap.remote(inps[i],i,func) for i in range(l)])
+  ids = []
+  for i in range(len(inps)):
+    ids += [__parallel_wrap.remote(inps[i],i,func)]
+  outs = []; fail = -1
+  for i in range(len(inps)):
+    try:
+      outs.append(ray.get(ids[i]))
+    except:
+      fail = i
+      print(f"Warning: parallel run {i} failed.",\
+        "Check number of inputs/outputs and whether input ranges are valid.",\
+        "Will save previous succesful runs to database.")
+      ray.shutdown()
+      break
   ray.shutdown()
   
   # Reshape outputs to 2D array
@@ -40,5 +53,5 @@ def parallel_runs(func,inps,nps):
   else:
     outs = np.array(outs).reshape((l,1))
 
-  return outs
+  return outs, fail
 
