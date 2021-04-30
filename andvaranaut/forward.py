@@ -7,7 +7,10 @@ import scipy.stats as st
 from time import time as stopwatch
 from seaborn import kdeplot
 import matplotlib.pyplot as plt
-from andvaranaut.utils import *
+import ray
+import multiprocessing as mp
+import os
+import numpy as np
 
 # Latin hypercube sampler and propagator
 class lhc():
@@ -37,12 +40,61 @@ class lhc():
     # Target function which takes X and returns Y provided by user
     self.target = target
 
+  # Function which wraps serial function for executing in parallel directories
+  @ray.remote
+  def __parallel_wrap(self,inp,idx):
+    d = f'./parallel/task{idx}'
+    os.system(f'mkdir {d}')
+    os.chdir(d)
+    res = self.target(inp)
+    os.chdir('../..')
+    return res
+
+  # Method which takes function, and 2D array of inputs
+  # Then runs in parallel for each set of inputs
+  # Returning 2D array of outputs
+  def __parallel_runs(self,inps,nps):
+      
+    # Ensure number of requested processors is reasonable
+    assert (nps <= mp.cpu_count()),\
+        "Error: number of processors selected exceeds available."
+    
+    # Create parallel directory for tasks
+    os.system('mkdir parallel')
+
+    # Run function in parallel    
+    ray.init(num_cpus=nps,log_to_driver=False,ignore_reinit_error=True)
+    l = len(inps)
+    ids = []
+    for i in range(len(inps)):
+      ids += [self.__parallel_wrap.remote(self,inps[i],i)]
+    outs = []; fail = -1
+    for i in range(len(inps)):
+      try:
+        outs.append(ray.get(ids[i]))
+      except:
+        fail = i
+        print(f"Warning: parallel run {i} failed.",\
+          "Check number of inputs/outputs and whether input ranges are valid.",\
+          "Will save previous successful runs to database.")
+        ray.shutdown()
+        break
+    ray.shutdown()
+    
+    # Reshape outputs to 2D array
+    if isinstance(outs[0],np.ndarray):
+      outs = np.array(outs)
+    else:
+      outs = np.array(outs).reshape((l,1))
+
+    return outs, fail
+
   # Private method which takes array of x samples and evaluates y at each
   def __vector_solver(self,xsamps,parallel,nproc):
     t0 = stopwatch()
     if parallel:
-      # Parallel execution using utils.py
-      ysamps,fail = parallel_runs(self.target,xsamps,nproc)
+      # Parallel execution using ray
+      ysamps,fail = self.__parallel_runs(xsamps,nproc)
       assert ysamps.shape[1] == self.ny, "Specified ny does not match function output"
       if fail > -1:
         xsamps = xsamps[:fail]
