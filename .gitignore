@@ -5,3 +5,4 @@ notebook.log
 *.nfs*
 .ipynb_checkpoints
 parallel
+*.pickle
