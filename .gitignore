@@ -4,3 +4,4 @@ notebook.log
 *.swp
 *.nfs*
 .ipynb_checkpoints
+parallel
