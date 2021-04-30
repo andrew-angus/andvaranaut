@@ -13,7 +13,7 @@ To install run the following in the same directory as setup.py (can drop the --u
 ### Current
 
 Latin hypercube sampling  
-UQ forward propagation
+UQ forward propagation  
 Parallel target function execution
 
 ### In Development
