@@ -79,21 +79,47 @@ class lhc():
   # Add n samples to current via latin hypercube sampling
   def sample(self,nsamps,parallel=False,nproc=None):
     points = latin_random(nsamps,self.nx)
-    xsamps = np.zeros((nsamps,self.nx))
-    for i in range(nsamps):
-      for j in range(self.nx):
-        xsamps[i,j] = self.dists[j].ppf(points[i,j])
+    xsamps = np.array([[self.dists[j].ppf(points[i,j]) \
+              for j in range(self.nx)]for i in range(nsamps)])
     self.__vector_solver(xsamps,parallel,nproc)
 
   # Delete n samples by random indexing
   # ToDo: Better to delete by low resolution latin hypercube?
-  def del_samples(self,nsamps):
-    current = len(self.x)
-    left = current-nsamps
-    a = np.arange(0,current)
-    inds = np.random.choice(a,size=left,replace=False)
-    self.x = self.x[inds,:]
-    self.y = self.y[inds,:]
+  def del_samples(self,ndels=None,method='coarse_lhc',idx=None):
+    if method == 'coarse_lhc':
+      if not isinstance(ndels,int) or ndels < 1:
+        raise Exception("Error: must specify positive int for ndels")
+      points = latin_random(ndels,self.nx)
+      xsamps = np.array([[self.dists[j].ppf(points[i,j]) \
+                for j in range(self.nx)]for i in range(ndels)])
+      for i in range(ndels):
+        lenx = len(self.x)
+        dis = np.zeros(lenx)
+        for j in range(lenx):
+          dis[j] = np.linalg.norm(self.x[j]-xsamps[i])
+        dmin = np.argmin(dis)
+        self.x = np.delete(self.x,dmin,axis=0)
+        self.y = np.delete(self.y,dmin,axis=0)
+    elif method == 'random':
+      if not isinstance(ndels,int) or ndels < 1:
+        raise Exception("Error: must specify positive int for ndels")
+      current = len(self.x)
+      left = current-ndels
+      a = np.arange(0,current)
+      inds = np.random.choice(a,size=left,replace=False)
+      self.x = self.x[inds,:]
+      self.y = self.y[inds,:]
+    elif method == 'specific':
+      if not isinstance(idx,(int,list)):
+        raise Exception("Error: must specify int or list of ints for idx")
+      mask = np.ones(len(self.x), dtype=bool)
+      mask[idx] = False
+      self.x = self.x[mask]
+      self.y = self.y[mask]
+    else:
+      raise Exception("Error: method must be one of 'coarse_lhc','random','specific'")
+
+
 
   # Plot y distribution using kernel density estimation
   def y_dist(self):
