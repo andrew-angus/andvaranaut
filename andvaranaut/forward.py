@@ -11,6 +11,7 @@ import ray
 import multiprocessing as mp
 import os
 import numpy as np
+import copy
 
 # Latin hypercube sampler and propagator
 class lhc():
@@ -171,8 +172,6 @@ class lhc():
     else:
       raise Exception("Error: method must be one of 'coarse_lhc','random','specific'")
 
-
-
   # Plot y distribution using kernel density estimation
   def y_dist(self):
     if self.ny == 1:
@@ -208,19 +207,28 @@ class lhc():
 
 # Inherit from LHC class and add data conversion methods
 class _surrogate(lhc):
-  def __init__(self):
-    pass
+  def __init__(self,nx=None,ny=None,dists=None,target=None,\
+                xcf=None,xrf=None,ycf=None,yrf=None):
+    # Call LHC init and add converted data attributes
+    super().__init__(nx,ny,dists,target)
+    self.xc = copy.deepcopy(self.x)
+    self.yc = copy.deepcopy(self.y)
+    # Validate provided data conversion & reversion functions
+    flag = True
+    for i in [xcf,xrf,ycf,yrf]:
+      if (i is not None) and (not callable(i)):
+        raise Exception(\
+            'Error: Provided data conversion/reversion function argument not callable.')
+      elif i is None and flag:
+        flag = False
+        print("Warning: One or more data conversion/reversion argument is None.",\
+            "This may affect surrogate performance.")
 
 # Inherit from surrogate class and add GP specific methods
 class gp(_surrogate):
-  def __init__(self):
-    self.dat = dat
-    self.kern = kernel
-    self.nvars = dat.x.shape[1]
+  def __init__(self,nx=None,ny=None,dists=None,target=None,\
+                xcf=None,xrf=None,ycf=None,yrf=None):
+    super().__init__(nx,ny,dists,target,xcf,xrf,ycf,yrf)
 
-  def fit(self,restarts=3,noise=False):
-
-    kernel = 'GPy.kern.'+self.kern+f'(input_dim=)'
-    if self.kern == 'RBF':
-      kern = self.kern
-      #self.model = GPy.models.GPRegression(self.dat.x,self.dat.y,)
+  def fit(self):
+    pass
