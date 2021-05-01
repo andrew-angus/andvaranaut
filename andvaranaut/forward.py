@@ -208,27 +208,47 @@ class lhc():
 # Inherit from LHC class and add data conversion methods
 class _surrogate(lhc):
   def __init__(self,nx=None,ny=None,dists=None,target=None,\
-                xcf=None,xrf=None,ycf=None,yrf=None):
-    # Call LHC init and add converted data attributes
+                xconrevs=None,yconrevs=None):
+    # Call LHC init and add converted dataset attributes
     super().__init__(nx,ny,dists,target)
     self.xc = copy.deepcopy(self.x)
     self.yc = copy.deepcopy(self.y)
     # Validate provided data conversion & reversion functions
     flag = True
-    for i in [xcf,xrf,ycf,yrf]:
-      if (i is not None) and (not callable(i)):
+    if xconrevs is None:
+      if yconrevs is None:
+        lst = []
+      else:
+        lst = yconrevs
+    elif yconrevs is None:
+      lst = xconrevs
+    for i in lst:
+      if (i is not None) and ((not callable(i.con)) or (not callable(i.rev))):
         raise Exception(\
-            'Error: Provided data conversion/reversion function argument not callable.')
+            'Error: Provided data conversion/reversion function not callable.')
       elif i is None and flag:
         flag = False
-        print("Warning: One or more data conversion/reversion argument is None.",\
+        print("Warning: One or more data conversion/reversion method is None.",\
             "This may affect surrogate performance.")
+  # Conversion and reversion methods
+  def xc(self):
+    for i in range(self.nx):
+      self.xc[:,i] = xconrevs[:,i].con(self.x[:,i])
+  def xr(self):
+    for i in range(self.nx):
+      self.x[:,i] = xconrevs[:,i].rev(self.xc[:,i])
+  def yc(self):
+    for i in range(self.ny):
+      self.yc[:,i] = yconrevs[:,i].con(self.y[:,i])
+  def yr(self):
+    for i in range(self.ny):
+      self.y[:,i] = yconrevs[:,i].rev(self.yc[:,i])
 
 # Inherit from surrogate class and add GP specific methods
 class gp(_surrogate):
   def __init__(self,nx=None,ny=None,dists=None,target=None,\
-                xcf=None,xrf=None,ycf=None,yrf=None):
-    super().__init__(nx,ny,dists,target,xcf,xrf,ycf,yrf)
+                xconrevs=None,yconrevs=None):
+    super().__init__(nx,ny,dists,target,xconrevs,yconrevs)
 
   def fit(self):
     pass
