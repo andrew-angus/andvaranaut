@@ -4,6 +4,7 @@ import pickle
 from scipy.special import logit as lg
 import numpy as np
 from functools import partial
+import scipy.stats as st
 
 # Save and load with pickle
 # ToDo: Faster with cpickle 
@@ -47,6 +48,12 @@ def log_con(y):
 def nonneg_con(y):
   y01 = y/(1+y)
   return  __logit(y01)
+# Probit transform to standard normal using scipy dist
+def probit_con(x,dist):
+  xcdf = dist.cdf(x)
+  std_norm = st.norm()
+  x = std_norm.ppf(xcdf)
+  return x
 
 ## Reversion functions
 
@@ -81,6 +88,12 @@ def log_rev(y):
 def nonneg_rev(y):
   y01 = __logistic(y)
   return  y01/(1-y01)
+# Reverse probit transform from standard normal using scipy dist
+def probit_rev(x,dist):
+  std_norm = st.norm()
+  xcdf = std_norm.cdf(x)
+  x = dist.ppf(xcdf)
+  return x
 
 # Define class wrappers for matching sets of conversions and reversions
 # Also allows a standard format for use in surrogates without worrying about function arguments
@@ -96,6 +109,10 @@ class logit_logistic:
   def __init__(self,dist):
     self.con = partial(logit,dist=dist)
     self.rev = partial(logistic,dist=dist)
+class probit:
+  def __init__(self,dist):
+    self.con = partial(probit_con,dist=dist)
+    self.rev = partial(probit_rev,dist=dist)
 class nonneg:
   def __init__(self):
     self.con = nonneg_con
@@ -104,6 +121,3 @@ class logarithm:
   def __init__(self):
     self.con = log_con
     self.rev = log_rev
-
-
-    
