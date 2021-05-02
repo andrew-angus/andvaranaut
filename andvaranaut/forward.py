@@ -173,35 +173,29 @@ class lhc():
 
   # Plot y distribution using kernel density estimation
   def y_dist(self):
-    if self.ny == 1:
-      kdeplot(self.y[:,0])
-      plt.xlabel('QoI')
+    for i in range(self.ny):
+      kdeplot(self.y[:,i])
+      plt.xlabel(f'y[{i}]')
       plt.ylabel('Density')
       plt.show()
-    else:
-      for i in range(self.ny):
-        kdeplot(self.y[:,i])
-        plt.xlabel(f'y[{i}]')
-        plt.ylabel('Density')
-        plt.show()
 
-  def scalexy(self):
-    # Produce scaled x samples
-    x_samps = np.zeros((len_tot,nvars))
-    if (nsamps > 0):
-      x_samps[:nsamps,:] = newx_samps
-    x_samps[nsamps:,:] = old_xsamps
-    x_scaled = copy.deepcopy(x_samps)
-    for j in range(nvars):
-      x_scaled[:,j] = x_convert(x_scaled[:,j],variables[j])
-
-    # Scale y samples
-    y_samps = np.zeros((len_tot,1))
-    if (nsamps > 0):
-      y_samps[:nsamps,:] = newy_samps
-    y_samps[nsamps:,:] = old_ysamps
-    y_scaled = copy.deepcopy(y_samps)
-    y_scaled = y_convert(y_scaled)
+  # Optionally set x and y attributes with existing datasets
+  def set_data(self,x,y):
+    # Checks that args are 2D numpy float arrays
+    if not isinstance(x,np.ndarray) or len(x.shape) != 2 or x.dtype != 'float64':
+      raise Exception(\
+          "Error: Setting data requires a 2d numpy array of float64 inputs")
+    if not isinstance(y,np.ndarray) or len(y.shape) != 2 or y.dtype != 'float64':
+      raise Exception(\
+          "Error: Setting data requires a 2d numpy array of float64 outputs")
+    # Also check if x data within input distribution interval
+    for i in range(self.nx):
+      intv = self.dists[i].interval(1.0)
+      if not all(x[:,i] >= intv[0]) or not all(x[:,i] <= intv[1]):
+        raise Exception(\
+            "Error: provided x data must fit within provided input distribution ranges.")
+    self.x = x
+    self.y = y
  
 # Inherit from LHC class and add data conversion methods
 class _surrogate(lhc):
