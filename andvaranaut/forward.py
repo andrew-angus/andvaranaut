@@ -137,7 +137,6 @@ class lhc():
     self.__vector_solver(xsamps,parallel,nproc)
 
   # Delete n samples by random indexing
-  # ToDo: Better to delete by low resolution latin hypercube?
   def del_samples(self,ndels=None,method='coarse_lhc',idx=None):
     if method == 'coarse_lhc':
       if not isinstance(ndels,int) or ndels < 1:
@@ -204,45 +203,64 @@ class lhc():
     y_scaled = copy.deepcopy(y_samps)
     y_scaled = y_convert(y_scaled)
  
-
 # Inherit from LHC class and add data conversion methods
 class _surrogate(lhc):
-  def __init__(self,nx=None,ny=None,dists=None,target=None,\
+  def __init__(self,nx,ny,dists,target,\
                 xconrevs=None,yconrevs=None):
     # Call LHC init and add converted dataset attributes
     super().__init__(nx,ny,dists,target)
     self.xc = copy.deepcopy(self.x)
     self.yc = copy.deepcopy(self.y)
     # Validate provided data conversion & reversion functions
-    flag = True
+    flag = False
     if xconrevs is None:
-      if yconrevs is None:
-        lst = []
-      else:
-        lst = yconrevs
-    elif yconrevs is None:
-      lst = xconrevs
-    for i in lst:
+      xconrevs = [None for i in range(self.nx)]
+    if yconrevs is None:
+      yconrevs = [None for i in range(self.ny)]
+    if not isinstance(xconrevs,list) or len(xconrevs) != self.nx:
+      raise Exception(\
+          "Error: xconrevs must be None or list of conversion/reversion classes of size nx")
+    if not isinstance(yconrevs,list) or len(yconrevs) != self.ny:
+      raise Exception(\
+          "Error: xconrevs must be None or list of conversion/reversion classes of size nx")
+    for j,i in enumerate(xconrevs+yconrevs):
       if (i is not None) and ((not callable(i.con)) or (not callable(i.rev))):
         raise Exception(\
             'Error: Provided data conversion/reversion function not callable.')
-      elif i is None and flag:
-        flag = False
-        print("Warning: One or more data conversion/reversion method is None.",\
-            "This may affect surrogate performance.")
-  # Conversion and reversion methods
-  def xc(self):
+      elif i is None:
+        if j < self.nx:
+          xconrevs[j] = _none_conrev()
+        else:
+          yconrevs[j-self.nx] = _none_conrev()
+        if not flag:
+          flag = True
+          print("Warning: One or more data conversion/reversion method is None.",\
+              "This may affect surrogate performance.")
+    self.xconrevs = xconrevs
+    self.yconrevs = yconrevs
+  
+  # Update sampling method to include data conversion
+  def sample(self,nsamps,parallel=False,nproc=None):
+    super().sample(nsamps,parallel,nproc)
+    self.__con(nsamps)
+
+  # Conversion of last n samples
+  def __con(self,nsamps):
+    self.xc = np.r_[self.xc,np.zeros((nsamps,self.nx))]
+    self.yc = np.r_[self.yc,np.zeros((nsamps,self.ny))]
     for i in range(self.nx):
-      self.xc[:,i] = xconrevs[:,i].con(self.x[:,i])
-  def xr(self):
-    for i in range(self.nx):
-      self.x[:,i] = xconrevs[:,i].rev(self.xc[:,i])
-  def yc(self):
+      self.xc[-nsamps:,i] = self.xconrevs[i].con(self.x[-nsamps:,i])
     for i in range(self.ny):
-      self.yc[:,i] = yconrevs[:,i].con(self.y[:,i])
-  def yr(self):
-    for i in range(self.ny):
-      self.y[:,i] = yconrevs[:,i].rev(self.yc[:,i])
+      self.yc[-nsamps:,i] = self.yconrevs[i].con(self.y[-nsamps:,i])
+
+# Class to replace None types in surrogate conrev arguments
+class _none_conrev:
+  def __init__(self):
+    pass
+  def con(self,x):
+   return x 
+  def rev(self,x):
+   return x 
 
 # Inherit from surrogate class and add GP specific methods
 class gp(_surrogate):
