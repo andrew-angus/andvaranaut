@@ -75,7 +75,7 @@ class lhc():
         outs.append(ray.get(ids[i]))
       except:
         fail = i
-        print(f"Warning: parallel run {i} failed.",\
+        print(f"Warning: parallel run {i+1} failed with samples {inps[i]}.",\
           "Check number of inputs/outputs and whether input ranges are valid.",\
           "Will save previous successful runs to database.")
         ray.shutdown()
