@@ -15,13 +15,13 @@ import copy
 
 # Latin hypercube sampler and propagator
 class lhc():
-  def __init__(self,nx=None,ny=None,dists=None,target=None):
+  def __init__(self,nx,ny,dists,target):
     # Check inputs
-    if (nx is None) or (nx < 1) or (not isinstance(nx,int)):
+    if (not isinstance(nx,int)) or (nx < 1):
       raise Exception('Error: must specify an integer number of input dimensions > 0') 
-    if (ny is None) or (ny < 1) or (not isinstance(ny,int)):
+    if (not isinstance(ny,int)) or (ny < 1):
       raise Exception('Error: must specify an integer number of output dimensions > 0') 
-    if (dists is None) or (len(dists) != nx):
+    if (not isinstance(dists,list)) or (len(dists) != nx):
       raise Exception(\
           'Error: must provide list of scipy.stats univariate distributions of length nx') 
     check = 'scipy.stats._distn_infrastructure'
@@ -29,7 +29,7 @@ class lhc():
     if any(flags):
       raise Exception(\
           'Error: must provide list of scipy.stats univariate distributions of length nx') 
-    if (target is None) or (not callable(target)):
+    if not callable(target):
       raise Exception(\
           'Error: must provide target function which produces output from specified inputs')
     # Initialise attributes
@@ -264,7 +264,7 @@ class _none_conrev:
 
 # Inherit from surrogate class and add GP specific methods
 class gp(_surrogate):
-  def __init__(self,nx=None,ny=None,dists=None,target=None,\
+  def __init__(self,nx,ny,dists,target,\
                 xconrevs=None,yconrevs=None):
     super().__init__(nx,ny,dists,target,xconrevs,yconrevs)
 
