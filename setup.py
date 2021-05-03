@@ -27,5 +27,6 @@ setup(
     "py-design",
     "ray",
     "scikit-learn",
+    "seaborn",
     ],
 )
