@@ -196,16 +196,44 @@ class lhc():
             "Error: provided x data must fit within provided input distribution ranges.")
     self.x = x
     self.y = y
+
+  # Optionally change input distributions
  
 # Inherit from LHC class and add data conversion methods
 class _surrogate(lhc):
   def __init__(self,nx,ny,dists,target,\
                 xconrevs=None,yconrevs=None):
-    # Call LHC init and add converted dataset attributes
+    # Call LHC init, then validate and set now data conversion/reversion attributes
     super().__init__(nx,ny,dists,target)
     self.xc = copy.deepcopy(self.x)
     self.yc = copy.deepcopy(self.y)
-    # Validate provided data conversion & reversion functions
+    self.__conrev_check(xconrevs,yconrevs)
+  
+  # Update sampling method to include data conversion
+  def sample(self,nsamps,parallel=False,nproc=None):
+    super().sample(nsamps,parallel,nproc)
+    self.__con(nsamps)
+
+  # Conversion of last n samples
+  def __con(self,nsamps):
+    self.xc = np.r_[self.xc,np.zeros((nsamps,self.nx))]
+    self.yc = np.r_[self.yc,np.zeros((nsamps,self.ny))]
+    for i in range(self.nx):
+      self.xc[-nsamps:,i] = self.xconrevs[i].con(self.x[-nsamps:,i])
+    for i in range(self.ny):
+      self.yc[-nsamps:,i] = self.yconrevs[i].con(self.y[-nsamps:,i])
+
+  # Allow for changing conversion/reversion methods
+  def change_conrevs(self,xconrevs,yconrevs):
+    # Check and set new lists, then update converted datasets
+    self.__conrev_check(xconrevs,yconrevs)
+    for i in range(self.nx):
+      self.xc[:,i] = self.xconrevs[i].con(self.x[:,i])
+    for i in range(self.ny):
+      self.yc[:,i] = self.yconrevs[i].con(self.y[:,i])
+
+  # Converison/reversion input checking and setting (used in __init__ and change_conrevs)
+  def __conrev_check(self,xconrevs,yconrevs):
     flag = False
     if xconrevs is None:
       xconrevs = [None for i in range(self.nx)]
@@ -232,20 +260,6 @@ class _surrogate(lhc):
               "This may affect surrogate performance.")
     self.xconrevs = xconrevs
     self.yconrevs = yconrevs
-  
-  # Update sampling method to include data conversion
-  def sample(self,nsamps,parallel=False,nproc=None):
-    super().sample(nsamps,parallel,nproc)
-    self.__con(nsamps)
-
-  # Conversion of last n samples
-  def __con(self,nsamps):
-    self.xc = np.r_[self.xc,np.zeros((nsamps,self.nx))]
-    self.yc = np.r_[self.yc,np.zeros((nsamps,self.ny))]
-    for i in range(self.nx):
-      self.xc[-nsamps:,i] = self.xconrevs[i].con(self.x[-nsamps:,i])
-    for i in range(self.ny):
-      self.yc[-nsamps:,i] = self.yconrevs[i].con(self.y[-nsamps:,i])
 
 # Class to replace None types in surrogate conrev arguments
 class _none_conrev:
