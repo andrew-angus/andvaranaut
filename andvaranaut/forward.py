@@ -271,21 +271,21 @@ class _none_conrev:
 
 # Inherit from surrogate class and add GP specific methods
 class gp(_surrogate):
-  def __init__(self,nx,ny,dists,target,xconrevs=None,yconrevs=None):
+  def __init__(self,nx,ny,dists,target,xconrevs=None,yconrevs=None,\
+                kernel='RBF',noise=True):
     super().__init__(nx,ny,dists,target,xconrevs,yconrevs)
-    self.m = None
-    self.kernel = None
+    self.change_model(kernel,noise)
     self.xtrain = None
     self.xtest = None
     self.ytrain = None
     self.ytest = None
 
   # Fit GP standard method
-  def fit(self,kernel='RBF',no_noise=False,restarts=3):
-    self.m = self.__fit(mode='converted',kernel,no_noise,restarts)
+  def fit(self,restarts=3):
+    self.m = self.__fit(mode='converted',restarts)
 
   # More flexible private fit method which can use unconverted or train-test datasets
-  def __fit(self,mode='converted',kernel='RBF',no_noise=False,restarts=3):
+  def __fit(self,mode,restarts=3):
     # Select datasets
     if mode == 'converted':
       x = self.xc; y = self.yc
@@ -294,16 +294,35 @@ class gp(_surrogate):
       x = self.x; y = self.y
     elif mode == 'train_test':
       x = self.xtrain; y = self.ytrain
-    # Check valid kernel
-    kerns = ['RBF','Matern52','Matern32','Exponential']
-    if kernel not in kerns:
-      raise Exception(f"Error: kernel must be one of {kerns}")
+    # Get correct GPy kernel
     kstring = 'GPy.kern.'+kernel+'(input_dim=self.nx,variance=1.,lengthscale=1.,ARD=True)'
     kern = eval(kstring)
-    if no_noise:
+    # Fit and return model
+    if not noise:
       m = GPy.models.GPRegression(x,y,kern,noise_var=0.0,normalizer=True)
       m.likelihood.fix()
     else:
       m = GPy.models.GPRegression(x,y,kern,noise_var=1.0,normalizer=True)
     m.optimize_restarts(restarts)
     return m
+
+  # Make train-test split and populate attributes
+  def train_test(self,training_frac=0.9)
+    self.xtrain,self.xtest,self.ytrain,self.ytest = \
+      train_test_split(self.xc,self.yc,train_size=training_frac)
+
+  # Train GP on training set and evaluate against test data 
+  def test_plots(self,converted=True,restarts=3):
+    mtrain = self.__fit(mode='train_test',restarts=restarts)
+
+  # Method to change noise/kernel attributes, scrubs any saved model
+  def change_model(self,kernel,noise):
+    kerns = ['RBF','Matern52','Matern32','Exponential']
+    if kernel not in kerns:
+      raise Exception(f"Error: kernel must be one of {kerns}")
+    if not isinstance(noise,bool):
+      raise Exception(f"Error: noise must be of type bool")
+    self.kernel = kernel
+    self.noise = noise
+    self.m = None
+  
