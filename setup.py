@@ -26,5 +26,6 @@ setup(
     "scipy",
     "py-design",
     "ray",
+    "scikit-learn",
     ],
 )
