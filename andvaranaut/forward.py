@@ -201,8 +201,7 @@ class lhc():
  
 # Inherit from LHC class and add data conversion methods
 class _surrogate(lhc):
-  def __init__(self,nx,ny,dists,target,\
-                xconrevs=None,yconrevs=None):
+  def __init__(self,nx,ny,dists,target,xconrevs=None,yconrevs=None):
     # Call LHC init, then validate and set now data conversion/reversion attributes
     super().__init__(nx,ny,dists,target)
     self.xc = copy.deepcopy(self.x)
@@ -272,9 +271,39 @@ class _none_conrev:
 
 # Inherit from surrogate class and add GP specific methods
 class gp(_surrogate):
-  def __init__(self,nx,ny,dists,target,\
-                xconrevs=None,yconrevs=None):
+  def __init__(self,nx,ny,dists,target,xconrevs=None,yconrevs=None):
     super().__init__(nx,ny,dists,target,xconrevs,yconrevs)
+    self.m = None
+    self.kernel = None
+    self.xtrain = None
+    self.xtest = None
+    self.ytrain = None
+    self.ytest = None
 
-  def fit(self):
-    pass
+  # Fit GP standard method
+  def fit(self,kernel='RBF',no_noise=False,restarts=3):
+    self.m = self.__fit(mode='converted',kernel,no_noise,restarts)
+
+  # More flexible private fit method which can use unconverted or train-test datasets
+  def __fit(self,mode='converted',kernel='RBF',no_noise=False,restarts=3):
+    # Select datasets
+    if mode == 'converted':
+      x = self.xc; y = self.yc
+      self.kernel = kernel
+    elif mode == 'original':
+      x = self.x; y = self.y
+    elif mode == 'train_test':
+      x = self.xtrain; y = self.ytrain
+    # Check valid kernel
+    kerns = ['RBF','Matern52','Matern32','Exponential']
+    if kernel not in kerns:
+      raise Exception(f"Error: kernel must be one of {kerns}")
+    kstring = 'GPy.kern.'+kernel+'(input_dim=self.nx,variance=1.,lengthscale=1.,ARD=True)'
+    kern = eval(kstring)
+    if no_noise:
+      m = GPy.models.GPRegression(x,y,kern,noise_var=0.0,normalizer=True)
+      m.likelihood.fix()
+    else:
+      m = GPy.models.GPRegression(x,y,kern,noise_var=1.0,normalizer=True)
+    m.optimize_restarts(restarts)
+    return m
