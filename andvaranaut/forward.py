@@ -181,6 +181,7 @@ class lhc():
       plt.show()
 
   # Optionally set x and y attributes with existing datasets
+  ## Dubious whether this should exist as it invalidates analysis in most cases
   def set_data(self,x,y):
     # Checks that args are 2D numpy float arrays
     if not isinstance(x,np.ndarray) or len(x.shape) != 2 or x.dtype != 'float64':
@@ -197,8 +198,6 @@ class lhc():
             "Error: provided x data must fit within provided input distribution ranges.")
     self.x = x
     self.y = y
-
-  # Optionally change input distributions
  
 # Inherit from LHC class and add data conversion methods
 class _surrogate(lhc):
@@ -283,24 +282,24 @@ class gp(_surrogate):
 
   # Fit GP standard method
   def fit(self,restarts=3):
-    self.m = self.__fit(mode='converted',restarts)
+    self.m = self.__fit(mode='converted',restarts=restarts)
 
   # More flexible private fit method which can use unconverted or train-test datasets
   def __fit(self,mode,restarts=3):
     # Select datasets
     if mode == 'converted':
       x = self.xc; y = self.yc
-      self.kernel = kernel
     elif mode == 'original':
       x = self.x; y = self.y
     elif mode == 'train_test':
       x = self.xtrain; y = self.ytrain
     # Get correct GPy kernel
-    kstring = 'GPy.kern.'+kernel+'(input_dim=self.nx,variance=1.,lengthscale=1.,ARD=True)'
+    kstring = 'GPy.kern.'+self.kernel+'(input_dim=self.nx,variance=1.,lengthscale=1.,ARD=True)'
     kern = eval(kstring)
     # Fit and return model
-    if not noise:
-      m = GPy.models.GPRegression(x,y,kern,noise_var=0.0,normalizer=True)
+    if not self.noise:
+      meps = np.finfo(np.float64).eps
+      m = GPy.models.GPRegression(x,y,kern,noise_var=meps,normalizer=True)
       m.likelihood.fix()
     else:
       m = GPy.models.GPRegression(x,y,kern,noise_var=1.0,normalizer=True)
@@ -308,13 +307,52 @@ class gp(_surrogate):
     return m
 
   # Make train-test split and populate attributes
-  def train_test(self,training_frac=0.9)
+  def train_test(self,training_frac=0.9):
     self.xtrain,self.xtest,self.ytrain,self.ytest = \
       train_test_split(self.xc,self.yc,train_size=training_frac)
 
-  # Train GP on training set and evaluate against test data 
-  def test_plots(self,converted=True,restarts=3):
+  # Assess GP performance with several test plots and RMSE calcs
+  def test_plots(self,revert=True,restarts=3,yplots=True,xplots=True):
+    # Train model on training set and make predictions on xtest data
     mtrain = self.__fit(mode='train_test',restarts=restarts)
+    ypred,ypred_var = mtrain.predict(self.xtest)
+    # Either revert data to original for comparison or leave as is
+    if revert:
+      xtest = np.zeros_like(self.xtest)
+      ytest = np.zeros_like(self.ytest)
+      for i in range(self.nx):
+        xtest[:,i] = self.xconrevs[i].rev(self.xtest[:,i])
+      for i in range(self.ny):
+        ypred[:,i] = self.yconrevs[i].rev(ypred[:,i])
+        ytest[:,i] = self.yconrevs[i].rev(self.ytest[:,i])
+    else: 
+      xtest = self.xtest
+      ytest = self.ytest
+    # RMSE for each y variable
+    for i in range(self.ny):
+      rmse = np.sqrt(np.sum((ypred[:,i]-ytest[:,i])**2)/len(ytest[:,i]))
+      print(f'RMSE for y[{i}] is: {rmse}')
+    # Compare ytest and predictions for each output variable
+    if yplots:
+      for i in range(self.ny):
+        plt.title(f'y[{i}]')
+        plt.plot(ytest[:,i],ytest[:,i],'-',label='True')
+        plt.plot(ytest[:,i],ypred[:,i],'x',label='GP')
+        plt.ylabel(f'y[{i}]')
+        plt.xlabel(f'y[{i}]')
+        plt.legend()
+        plt.show()
+    # Compare ytest and predictions wrt each input variable
+    if xplots:
+      for i in range(self.ny):
+        for j in range(self.nx):
+          plt.title(f'y[{i}] wrt x[{j}]')
+          xsort = np.sort(xtest[:,j])
+          asort = np.argsort(xtest[:,j])
+          plt.plot(xsort,ypred[asort,i],label='GP')
+          plt.plot(xsort,ytest[asort,i],label='Test')
+          plt.legend()
+          plt.show()
 
   # Method to change noise/kernel attributes, scrubs any saved model
   def change_model(self,kernel,noise):
