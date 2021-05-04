@@ -16,7 +16,7 @@ from sklearn.model_selection import train_test_split
 
 # Latin hypercube sampler and propagator
 class lhc():
-  def __init__(self,nx,ny,dists,target):
+  def __init__(self,nx,ny,dists,target,parallel=False,nproc=1):
     # Check inputs
     if (not isinstance(nx,int)) or (nx < 1):
       raise Exception('Error: must specify an integer number of input dimensions > 0') 
@@ -33,76 +33,67 @@ class lhc():
     if not callable(target):
       raise Exception(\
           'Error: must provide target function which produces output from specified inputs')
+    if not isinstance(parallel,bool):
+      raise Exception("Error: parallel must be type bool.")
+    if not isinstance(nproc,int) or (nproc < 1):
+      raise Exception("Error: nproc argument must be an integer > 0")
+    assert (nproc <= mp.cpu_count()),\
+        "Error: number of processors selected exceeds available."
     # Initialise attributes
     self.nx = nx # Input dimensions
     self.ny = ny # Output dimensions
     self.dists = dists # Input distributions (must be scipy)
     self.x = np.empty((0,nx))
     self.y = np.empty((0,ny))
-    # Target function which takes X and returns Y provided by user
-    self.target = target
+    self.target = target # Target function which takes X and returns Y
+    self.parallel = parallel
+    self.nproc = nproc
 
-  # Function which wraps serial function for executing in parallel directories
-  @ray.remote
-  def __parallel_wrap(self,inp,idx):
-    d = f'./parallel/task{idx}'
-    os.system(f'mkdir {d}')
-    os.chdir(d)
-    res = self.target(inp)
-    os.chdir('../..')
-    return res
 
   # Method which takes function, and 2D array of inputs
   # Then runs in parallel for each set of inputs
   # Returning 2D array of outputs
-  def __parallel_runs(self,inps,nps):
-      
-    # Ensure number of requested processors is reasonable
-    assert (nps <= mp.cpu_count()),\
-        "Error: number of processors selected exceeds available."
-    
+  def __parallel_runs(self,inps):
     # Create parallel directory for tasks
     os.system('mkdir parallel')
 
-    # Run function in parallel    
-    ray.init(num_cpus=nps,log_to_driver=False,ignore_reinit_error=True)
+    # Run function in parallel in individual directories    
+    ray.init(num_cpus=self.nproc,log_to_driver=False)
     l = len(inps)
-    ids = []
-    for i in range(len(inps)):
-      ids += [self.__parallel_wrap.remote(self,inps[i],i)]
-    outs = []; fail = -1
-    for i in range(len(inps)):
+    all_ids = [_parallel_wrap.remote(self.target,inps[i],i) for i in range(l)]
+
+    # Get ids as they complete or fail, give warning on fail
+    outs = []; fails = np.empty(0,dtype=np.intc)
+    ids = copy.deepcopy(all_ids)
+    while len(ids):
+      done_id,ids = ray.wait(ids)
       try:
-        outs.append(ray.get(ids[i]))
+        outs += ray.get(done_id)
       except:
-        fail = i
-        print(f"Warning: parallel run {i+1} failed with samples {inps[i]}.",\
-          "Check number of inputs/outputs and whether input ranges are valid.",\
-          "Will save previous successful runs to database.")
-        ray.shutdown()
-        break
+        idx = all_ids.index(done_id[0]) 
+        fails = np.append(fails,idx)
+        print(f"Warning: parallel run {idx+1} failed with samples {inps[idx]}.",\
+          "\nCheck number of inputs/outputs and whether input ranges are valid.")
     ray.shutdown()
     
     # Reshape outputs to 2D array
-    if isinstance(outs[0],np.ndarray):
-      outs = np.array(outs)
-    else:
-      outs = np.array(outs).reshape((l,1))
+    outs = np.array(outs).reshape((len(outs),self.ny))
 
-    return outs, fail
+    return outs, fails
 
   # Private method which takes array of x samples and evaluates y at each
-  def __vector_solver(self,xsamps,parallel,nproc):
+  def __vector_solver(self,xsamps):
     t0 = stopwatch()
-    if parallel:
-      # Parallel execution using ray
-      ysamps,fail = self.__parallel_runs(xsamps,nproc)
+    n_samples = len(xsamps)
+    # Parallel execution using ray
+    if self.parallel:
+      ysamps,fails = self.__parallel_runs(xsamps)
       assert ysamps.shape[1] == self.ny, "Specified ny does not match function output"
-      if fail > -1:
-        xsamps = xsamps[:fail]
+      mask = np.ones(n_samples, dtype=bool)
+      mask[fails] = False
+      xsamps = xsamps[mask]
+    # Serial execution
     else:
-      # Serial execution
-      n_samples = len(xsamps)
       ysamps = np.zeros((n_samples,self.ny))
       for i in range(n_samples):
         try:
@@ -131,10 +122,13 @@ class lhc():
     self.y = np.r_[self.y,ysamps]
 
   # Add n samples to current via latin hypercube sampling
-  def sample(self,nsamps,parallel=False,nproc=None):
+  def sample(self,nsamps):
+    if not isinstance(nsamps,int) or (nsamps < 1):
+      raise Exception("Error: nsamps argument must be an integer > 0")
     xsamps = self.__latin_sample(nsamps)
-    self.__vector_solver(xsamps,parallel,nproc)
+    self.__vector_solver(xsamps)
 
+  # Produce latin hypercube samples from input distributions
   def __latin_sample(self,nsamps):
     points = latin_random(nsamps,self.nx)
     xsamps = np.zeros_like(points)
@@ -218,6 +212,16 @@ class lhc():
             "Error: provided x data must fit within provided input distribution ranges.")
     self.x = x
     self.y = y
+
+# Function which wraps serial function for executing in parallel directories
+@ray.remote(max_retries=0)
+def _parallel_wrap(fun,inp,idx):
+  d = f'./parallel/task{idx}'
+  os.system(f'mkdir {d}')
+  os.chdir(d)
+  res = fun(inp)
+  os.chdir('../..')
+  return res
  
 # Inherit from LHC class and add data conversion methods
 class _surrogate(lhc):
