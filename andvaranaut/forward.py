@@ -308,6 +308,14 @@ class gp(_surrogate):
     self.ytrain = None
     self.ytest = None
 
+  # Inherit del_samples and extend to remove test-train datasets
+  def del_samples(self,ndels=None,method='coarse_lhc',idx=None):
+    super().del_samples(ndels,method,idx)
+    self.xtrain = None
+    self.xtest = None
+    self.ytrain = None
+    self.ytest = None
+
   # Fit GP standard method
   def fit(self,restarts=3):
     self.m = self.__fit(mode='converted',restarts=restarts)
