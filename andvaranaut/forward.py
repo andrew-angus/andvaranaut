@@ -132,10 +132,15 @@ class lhc():
 
   # Add n samples to current via latin hypercube sampling
   def sample(self,nsamps,parallel=False,nproc=None):
-    points = latin_random(nsamps,self.nx)
-    xsamps = np.array([[self.dists[j].ppf(points[i,j]) \
-              for j in range(self.nx)]for i in range(nsamps)])
+    xsamps = self.__latin_sample(nsamps)
     self.__vector_solver(xsamps,parallel,nproc)
+
+  def __latin_sample(self,nsamps):
+    points = latin_random(nsamps,self.nx)
+    xsamps = np.zeros_like(points)
+    for j in range(self.nx):
+      xsamps[:,j] = self.dists[j].ppf(points[:,j])
+    return xsamps
 
   # Delete n samples by selected method
   def del_samples(self,ndels=None,method='coarse_lhc',idx=None):
@@ -143,13 +148,12 @@ class lhc():
 
   # Private method with more flexibility for extension in child classes
   def __del_samples(self,ndels,method,idx,returns):
+    # Delete samples by proximity to coarse LHC of size (ndels,nx)
     if method == 'coarse_lhc':
       if not isinstance(ndels,int) or ndels < 1:
         raise Exception("Error: must specify positive int for ndels")
-      points = latin_random(ndels,self.nx)
-      xsamps = np.array([[self.dists[j].ppf(points[i,j]) \
-                for j in range(self.nx)]for i in range(ndels)])
-      dmins = np.zeros(ndels)
+      xsamps = self.__latin_sample(ndels)
+      dmins = np.zeros(ndels,dtype=np.intc)
       for i in range(ndels):
         lenx = len(self.x)
         dis = np.zeros(lenx)
@@ -160,6 +164,7 @@ class lhc():
         self.y = np.delete(self.y,dmins[i],axis=0)
       if returns:
         return dmins
+    # Delete samples by choosing ndels random indexes
     elif method == 'random':
       if not isinstance(ndels,int) or ndels < 1:
         raise Exception("Error: must specify positive int for ndels")
@@ -171,6 +176,7 @@ class lhc():
       self.y = self.y[inds,:]
       if returns:
         return inds
+    # Delete samples at specified indexes
     elif method == 'specific':
       if not isinstance(idx,(int,list)):
         raise Exception("Error: must specify int or list of ints for idx")
@@ -185,8 +191,12 @@ class lhc():
 
   # Plot y distribution using kernel density estimation
   def y_dist(self):
+    self.__y_dist(self.y)
+
+  # Private y_dist method with more flexibility for inherited class extension
+  def __y_dist(self,y):
     for i in range(self.ny):
-      kdeplot(self.y[:,i])
+      kdeplot(y[:,i])
       plt.xlabel(f'y[{i}]')
       plt.ylabel('Density')
       plt.show()
@@ -291,6 +301,26 @@ class _surrogate(lhc):
     self.yc = np.empty((0,self.ny))
     self.__con(len(x))
 
+  # Inherit and extend y_dist to have dist by surrogate predictions
+  def y_dist(self,nsamps=None,return_data=False,surrogate=True,predictfun=None):
+    # Allow for use of surrogate evaluations or underlying datasets
+    if surrogate:
+      xsamps = super()._lhc__latin_sample(nsamps)
+      xcons = np.zeros((nsamps,self.nx))
+      for i in range(self.nx):
+        xcons[:,i] = self.xconrevs[i].con(xsamps[:,i])
+      ypreds = predictfun(xcons)
+      yrevs = np.zeros((nsamps,self.ny))
+      for i in range(self.ny):
+        yrevs[:,i] = self.yconrevs[i].rev(ypreds[:,i])
+      super()._lhc__y_dist(yrevs)
+      if return_data:
+        return xsamps,yrevs
+    elif not surrogate:
+      super().y_dist()
+    else:
+      raise Exception("Error: surrogate argument must be of type bool")
+
 # Class to replace None types in surrogate conrev arguments
 class _none_conrev:
   def __init__(self):
@@ -368,7 +398,7 @@ class gp(_surrogate):
       xtest = self.xtest
       ytest = self.ytest
     # RMSE for each y variable
-    #print('\n')
+    print()
     for i in range(self.ny):
       rmse = np.sqrt(np.sum((ypred[:,i]-ytest[:,i])**2)/len(ytest[:,i]))
       print(f'RMSE for y[{i}] is: {rmse}')
@@ -412,5 +442,11 @@ class gp(_surrogate):
     self.__scrub_train_test()
 
   # Inherit and extend y_dist to have dist by surrogate predictions
-  #def y_dist(self,npreds,return_data=False):
-  
+  def y_dist(self,nsamps=None,return_data=False,surrogate=True):
+    def predict_fun(x):
+      ypreds,yvarpreds = self.m.predict(x)
+      return ypreds
+    if return_data:
+      return super().y_dist(nsamps,return_data,surrogate,predict_fun)
+    else:
+      super().y_dist(nsamps,return_data,surrogate,predict_fun)
