@@ -65,7 +65,8 @@ class lhc():
     # Get ids as they complete or fail, give warning on fail
     outs = []; fails = np.empty(0,dtype=np.intc)
     ids = copy.deepcopy(all_ids)
-    while len(ids):
+    lold = l
+    while lold:
       done_id,ids = ray.wait(ids)
       try:
         outs += ray.get(done_id)
@@ -74,7 +75,16 @@ class lhc():
         fails = np.append(fails,idx)
         print(f"Warning: parallel run {idx+1} failed with samples {inps[idx]}.",\
           "\nCheck number of inputs/outputs and whether input ranges are valid.")
+      lnew = len(ids)
+      if lnew != lold:
+        lold = lnew
+        print(f'Run is {(l-lold)/l:0.1%} complete.',end='\r')
     ray.shutdown()
+    """
+    outs = ray.get(all_ids)
+    fails = np.empty(0,dtype=np.intc)
+    ray.shutdown()
+    """
     
     # Reshape outputs to 2D array
     outs = np.array(outs).reshape((len(outs),self.ny))
@@ -110,7 +120,7 @@ class lhc():
         except:
           raise Exception("Error: number of target function outputs is not equal to ny")
         print(f'Run is {(i+1)/n_samples:0.1%} complete.',end='\r')
-    print('Run is 100.0% complete.')
+    print()
     t1 = stopwatch()
     print(f'Time taken: {t1-t0:0.2f} s')
 
@@ -235,8 +245,8 @@ class _surrogate(lhc):
     self.__conrev_check(xconrevs,yconrevs)
   
   # Update sampling method to include data conversion
-  def sample(self,nsamps,parallel=False,nproc=None):
-    super().sample(nsamps,parallel,nproc)
+  def sample(self,nsamps):
+    super().sample(nsamps)
     self.__con(nsamps)
 
   # Conversion of last n samples
