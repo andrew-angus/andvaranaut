@@ -89,33 +89,35 @@ class lhc():
     if self.parallel:
       ysamps,fails = self.__parallel_runs(xsamps)
       assert ysamps.shape[1] == self.ny, "Specified ny does not match function output"
-      mask = np.ones(n_samples, dtype=bool)
-      mask[fails] = False
-      xsamps = xsamps[mask]
     # Serial execution
     else:
-      ysamps = np.zeros((n_samples,self.ny))
+      ysamps = np.empty((0,self.ny))
+      fails = np.empty(0,dtype=np.intc)
       for i in range(n_samples):
+        # Keep track of fails but run rest of samples
         try:
           yout = self.target(xsamps[i,:])
-          if isinstance(yout,np.ndarray):
-            assert len(yout) == self.ny
-          else:
-            assert self.ny == 1
-          ysamps[i,:] = yout
         except:
-          # If a sample evaluation fails still dump succesful samples
-          self.x = np.r_[self.x,xsamps[:i,:]]
-          self.y = np.r_[self.y,ysamps[:i,:]]
-          errstr = f"Error: Target function evaluation failed at sample {i+1} "+\
+          errstr = f"Warning: Target function evaluation failed at sample {i+1} "+\
               "with xsamples: " +str(xsamps[i,:])+\
-              "\nCheck number of inputs/outputs is correct and range of input values valid."+\
-              f"\n{i} samples succesfully added to dataset."
-          raise Exception(errstr)
+              "\nCheck number of inputs and range of input values valid."
+          print(errstr)
+          fails = np.append(fails,i)
+          continue
+        # Number of function outputs check
+        try:
+          ysamps = np.vstack((ysamps,yout))
+        except:
+          raise Exception("Error: number of target function outputs is not equal to ny")
         print(f'Run is {(i+1)/n_samples:0.1%} complete.',end='\r')
     print('Run is 100.0% complete.')
     t1 = stopwatch()
     print(f'Time taken: {t1-t0:0.2f} s')
+
+    # Remove failed samples
+    mask = np.ones(n_samples, dtype=bool)
+    mask[fails] = False
+    xsamps = xsamps[mask]
 
     # Add new evaluations to original data arrays
     self.x = np.r_[self.x,xsamps]
