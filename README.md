@@ -15,10 +15,10 @@ To install run the following in the same directory as setup.py (can drop the --u
 Latin hypercube sampling  
 UQ forward propagation  
 Parallel target function execution
+Gaussian process surrogates  
 
 ### In Development
 
-Gaussian process surrogates  
 Adaptive sampling  
 Differential evolution MCMC  
 MCMC R convergence analysis  
