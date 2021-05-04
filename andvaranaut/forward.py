@@ -191,6 +191,23 @@ class lhc():
       plt.ylabel('Density')
       plt.show()
 
+  # Optionally set x and y attributes with existing datasets
+  def set_data(self,x,y):
+    # Checks that args are 2D numpy float arrays
+    if not isinstance(x,np.ndarray) or len(x.shape) != 2 or x.dtype != 'float64':
+      raise Exception(\
+          "Error: Setting data requires a 2d numpy array of float64 inputs")
+    if not isinstance(y,np.ndarray) or len(y.shape) != 2 or y.dtype != 'float64':
+      raise Exception(\
+          "Error: Setting data requires a 2d numpy array of float64 outputs")
+    # Also check if x data within input distribution interval
+    for i in range(self.nx):
+      intv = self.dists[i].interval(1.0)
+      if not all(x[:,i] >= intv[0]) or not all(x[:,i] <= intv[1]):
+        raise Exception(\
+            "Error: provided x data must fit within provided input distribution ranges.")
+    self.x = x
+    self.y = y
  
 # Inherit from LHC class and add data conversion methods
 class _surrogate(lhc):
@@ -269,21 +286,7 @@ class _surrogate(lhc):
 
   # Optionally set x and y attributes with existing datasets
   def set_data(self,x,y):
-    # Checks that args are 2D numpy float arrays
-    if not isinstance(x,np.ndarray) or len(x.shape) != 2 or x.dtype != 'float64':
-      raise Exception(\
-          "Error: Setting data requires a 2d numpy array of float64 inputs")
-    if not isinstance(y,np.ndarray) or len(y.shape) != 2 or y.dtype != 'float64':
-      raise Exception(\
-          "Error: Setting data requires a 2d numpy array of float64 outputs")
-    # Also check if x data within input distribution interval
-    for i in range(self.nx):
-      intv = self.dists[i].interval(1.0)
-      if not all(x[:,i] >= intv[0]) or not all(x[:,i] <= intv[1]):
-        raise Exception(\
-            "Error: provided x data must fit within provided input distribution ranges.")
-    self.x = x
-    self.y = y
+    super().set_data(x,y)
     self.xc = np.empty((0,self.nx))
     self.yc = np.empty((0,self.ny))
     self.__con(len(x))
@@ -403,4 +406,7 @@ class gp(_surrogate):
     self.kernel = kernel
     self.noise = noise
     self.m = None
+
+  # Inherit and extend y_dist to have dist by surrogate predictions
+  #def y_dist(self,npreds,return_data=False):
   
