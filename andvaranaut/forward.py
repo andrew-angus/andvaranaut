@@ -80,11 +80,6 @@ class lhc():
         lold = lnew
         print(f'Run is {(l-lold)/l:0.1%} complete.',end='\r')
     ray.shutdown()
-    """
-    outs = ray.get(all_ids)
-    fails = np.empty(0,dtype=np.intc)
-    ray.shutdown()
-    """
     
     # Reshape outputs to 2D array
     outs = np.array(outs).reshape((len(outs),self.ny))
@@ -388,7 +383,10 @@ class gp(_surrogate):
       m.likelihood.fix()
     else:
       m = GPy.models.GPRegression(x,y,kern,noise_var=1.0,normalizer=True)
-    m.optimize_restarts(restarts)
+    if self.parallel:
+      m.optimize_restarts(restarts,parallel=True,num_processes=self.nproc)
+    else:
+      m.optimize_restarts(restarts)
     return m
 
   # Make train-test split and populate attributes
