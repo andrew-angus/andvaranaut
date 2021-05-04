@@ -137,22 +137,29 @@ class lhc():
               for j in range(self.nx)]for i in range(nsamps)])
     self.__vector_solver(xsamps,parallel,nproc)
 
-  # Delete n samples by random indexing
+  # Delete n samples by selected method
   def del_samples(self,ndels=None,method='coarse_lhc',idx=None):
+    self.__del_samples(ndels,method,idx,returns=False)
+
+  # Private method with more flexibility for extension in child classes
+  def __del_samples(self,ndels,method,idx,returns):
     if method == 'coarse_lhc':
       if not isinstance(ndels,int) or ndels < 1:
         raise Exception("Error: must specify positive int for ndels")
       points = latin_random(ndels,self.nx)
       xsamps = np.array([[self.dists[j].ppf(points[i,j]) \
                 for j in range(self.nx)]for i in range(ndels)])
+      dmins = np.zeros(ndels)
       for i in range(ndels):
         lenx = len(self.x)
         dis = np.zeros(lenx)
         for j in range(lenx):
           dis[j] = np.linalg.norm(self.x[j]-xsamps[i])
-        dmin = np.argmin(dis)
-        self.x = np.delete(self.x,dmin,axis=0)
-        self.y = np.delete(self.y,dmin,axis=0)
+        dmins[i] = np.argmin(dis)
+        self.x = np.delete(self.x,dmins[i],axis=0)
+        self.y = np.delete(self.y,dmins[i],axis=0)
+      if returns:
+        return dmins
     elif method == 'random':
       if not isinstance(ndels,int) or ndels < 1:
         raise Exception("Error: must specify positive int for ndels")
@@ -162,6 +169,8 @@ class lhc():
       inds = np.random.choice(a,size=left,replace=False)
       self.x = self.x[inds,:]
       self.y = self.y[inds,:]
+      if returns:
+        return inds
     elif method == 'specific':
       if not isinstance(idx,(int,list)):
         raise Exception("Error: must specify int or list of ints for idx")
@@ -169,6 +178,8 @@ class lhc():
       mask[idx] = False
       self.x = self.x[mask]
       self.y = self.y[mask]
+      if returns:
+        return mask
     else:
       raise Exception("Error: method must be one of 'coarse_lhc','random','specific'")
 
@@ -203,6 +214,20 @@ class _surrogate(lhc):
       self.xc[-nsamps:,i] = self.xconrevs[i].con(self.x[-nsamps:,i])
     for i in range(self.ny):
       self.yc[-nsamps:,i] = self.yconrevs[i].con(self.y[-nsamps:,i])
+
+  # Inherit from lhc __del_samples and add converted dataset deletion
+  def del_samples(self,ndels=None,method='coarse_lhc',idx=None):
+    returned = super()._lhc__del_samples(ndels,method,idx,returns=True)
+    if method == 'coarse_lhc':
+      for i in range(ndels):
+        self.xc = np.delete(self.xc,returned[i],axis=0)
+        self.yc = np.delete(self.yc,returned[i],axis=0)
+    elif method == 'random':
+      self.xc = self.xc[returned,:]
+      self.yc = self.yc[returned,:]
+    elif method == 'specific':
+      self.xc = self.xc[returned]
+      self.yc = self.yc[returned]
 
   # Allow for changing conversion/reversion methods
   def change_conrevs(self,xconrevs,yconrevs):
