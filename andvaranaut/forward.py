@@ -180,24 +180,6 @@ class lhc():
       plt.ylabel('Density')
       plt.show()
 
-  # Optionally set x and y attributes with existing datasets
-  ## Dubious whether this should exist as it invalidates analysis in most cases
-  def set_data(self,x,y):
-    # Checks that args are 2D numpy float arrays
-    if not isinstance(x,np.ndarray) or len(x.shape) != 2 or x.dtype != 'float64':
-      raise Exception(\
-          "Error: Setting data requires a 2d numpy array of float64 inputs")
-    if not isinstance(y,np.ndarray) or len(y.shape) != 2 or y.dtype != 'float64':
-      raise Exception(\
-          "Error: Setting data requires a 2d numpy array of float64 outputs")
-    # Also check if x data within input distribution interval
-    for i in range(self.nx):
-      intv = self.dists[i].interval(1.0)
-      if not all(x[:,i] >= intv[0]) or not all(x[:,i] <= intv[1]):
-        raise Exception(\
-            "Error: provided x data must fit within provided input distribution ranges.")
-    self.x = x
-    self.y = y
  
 # Inherit from LHC class and add data conversion methods
 class _surrogate(lhc):
@@ -259,6 +241,27 @@ class _surrogate(lhc):
               "This may affect surrogate performance.")
     self.xconrevs = xconrevs
     self.yconrevs = yconrevs
+
+  # Optionally set x and y attributes with existing datasets
+  def set_data(self,x,y):
+    # Checks that args are 2D numpy float arrays
+    if not isinstance(x,np.ndarray) or len(x.shape) != 2 or x.dtype != 'float64':
+      raise Exception(\
+          "Error: Setting data requires a 2d numpy array of float64 inputs")
+    if not isinstance(y,np.ndarray) or len(y.shape) != 2 or y.dtype != 'float64':
+      raise Exception(\
+          "Error: Setting data requires a 2d numpy array of float64 outputs")
+    # Also check if x data within input distribution interval
+    for i in range(self.nx):
+      intv = self.dists[i].interval(1.0)
+      if not all(x[:,i] >= intv[0]) or not all(x[:,i] <= intv[1]):
+        raise Exception(\
+            "Error: provided x data must fit within provided input distribution ranges.")
+    self.x = x
+    self.y = y
+    self.xc = np.empty((0,self.nx))
+    self.yc = np.empty((0,self.ny))
+    self.__con(len(x))
 
 # Class to replace None types in surrogate conrev arguments
 class _none_conrev:
@@ -329,6 +332,7 @@ class gp(_surrogate):
       xtest = self.xtest
       ytest = self.ytest
     # RMSE for each y variable
+    #print('\n')
     for i in range(self.ny):
       rmse = np.sqrt(np.sum((ypred[:,i]-ytest[:,i])**2)/len(ytest[:,i]))
       print(f'RMSE for y[{i}] is: {rmse}')
@@ -351,6 +355,8 @@ class gp(_surrogate):
           asort = np.argsort(xtest[:,j])
           plt.plot(xsort,ypred[asort,i],label='GP')
           plt.plot(xsort,ytest[asort,i],label='Test')
+          plt.ylabel(f'y[{i}]')
+          plt.xlabel(f'x[{j}]')
           plt.legend()
           plt.show()
 
