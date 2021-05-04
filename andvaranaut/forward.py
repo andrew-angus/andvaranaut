@@ -306,6 +306,9 @@ class gp(_surrogate):
                 kernel='RBF',noise=True):
     super().__init__(nx,ny,dists,target,xconrevs,yconrevs)
     self.change_model(kernel,noise)
+    self.__scrub_train_test()
+
+  def __scrub_train_test(self):
     self.xtrain = None
     self.xtest = None
     self.ytrain = None
@@ -314,10 +317,7 @@ class gp(_surrogate):
   # Inherit del_samples and extend to remove test-train datasets
   def del_samples(self,ndels=None,method='coarse_lhc',idx=None):
     super().del_samples(ndels,method,idx)
-    self.xtrain = None
-    self.xtest = None
-    self.ytrain = None
-    self.ytest = None
+    self.__scrub_train_test()
 
   # Fit GP standard method
   def fit(self,restarts=3):
@@ -406,6 +406,10 @@ class gp(_surrogate):
     self.kernel = kernel
     self.noise = noise
     self.m = None
+
+  def set_data(self,x,y):
+    super().set_data(x,y)
+    self.__scrub_train_test()
 
   # Inherit and extend y_dist to have dist by surrogate predictions
   #def y_dist(self,npreds,return_data=False):
