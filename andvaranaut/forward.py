@@ -46,9 +46,8 @@ class lhc():
     self.x = np.empty((0,nx))
     self.y = np.empty((0,ny))
     self.target = target # Target function which takes X and returns Y
-    self.parallel = parallel
-    self.nproc = nproc
-
+    self.parallel = parallel # Whether to use parallelism wherever possible
+    self.nproc = nproc # Number of processors to use if using parallelism
 
   # Method which takes function, and 2D array of inputs
   # Then runs in parallel for each set of inputs
@@ -58,7 +57,8 @@ class lhc():
     os.system('mkdir parallel')
 
     # Run function in parallel in individual directories    
-    ray.init(num_cpus=self.nproc,log_to_driver=False)
+    if not ray.is_initialized():
+      ray.init(num_cpus=self.nproc,log_to_driver=False)
     l = len(inps)
     all_ids = [_parallel_wrap.remote(self.target,inps[i],i) for i in range(l)]
 
@@ -393,6 +393,42 @@ class gp(_surrogate):
     print(f'Time taken: {t2-t1:0.2f} s')
     return m
 
+  # Standard predict method which wraps the GPy predict and allows for parallelism
+  def predict(self,x,return_var=False):
+    return self.__predict(self.m,x,return_var)
+
+  # Private predict method with more flexibility to act on any provided GPy model
+  def __predict(self,m,x,return_var=False):
+    print('Predicting...')
+    t0 = stopwatch()
+    if self.parallel:
+      # Break x values into maximal sized chunks and use ray parallelism
+      if not ray.is_initialized():
+        ray.init(num_cpus=self.nproc,log_to_driver=False)
+      chunks = np.minimum(len(x),self.nproc)
+      crem = len(x) % chunks
+      csize = round((len(x)-crem)/chunks)
+      csizes = np.ones(chunks,dtype=np.intc)*csize
+      csizes[:crem] += 1
+      cinds = np.array([np.sum(csizes[:i+1]) for i in range(chunks)])
+      cinds = np.r_[0,cinds]
+      outs = ray.get([_parallel_predict.remote(\
+          x[cinds[i]:cinds[i+1]].reshape((csizes[i],self.nx)),\
+          self.m.predict) for i in range(chunks)]) # Chunks
+      ypreds = np.empty((0,self.ny)); yvarpreds = np.empty((0,self.ny))
+      for i in range(chunks):
+        ypreds = np.r_[ypreds,outs[i][0]]
+        yvarpreds = np.r_[yvarpreds,outs[i][1]]
+      ray.shutdown()
+    else:
+      ypreds,yvarpreds = self.m.predict(x)
+    t1 = stopwatch()
+    print(f'Time taken: {t1-t0:0.2f} s')
+    if return_var:
+      return ypreds,yvarpreds
+    else:
+      return ypreds
+
   # Make train-test split and populate attributes
   def train_test(self,training_frac=0.9):
     self.xtrain,self.xtest,self.ytrain,self.ytest = \
@@ -402,7 +438,8 @@ class gp(_surrogate):
   def test_plots(self,restarts=3,revert=True,yplots=True,xplots=True):
     # Train model on training set and make predictions on xtest data
     mtrain = self.__fit(mode='train_test',restarts=restarts)
-    ypred,ypred_var = mtrain.predict(self.xtest)
+    #ypred,ypred_var = mtrain.predict(self.xtest)
+    ypred = self.__predict(mtrain,self.xtest,return_var=False)
     # Either revert data to original for comparison or leave as is
     if revert:
       xtest = np.zeros_like(self.xtest)
@@ -461,10 +498,8 @@ class gp(_surrogate):
 
   # Inherit and extend y_dist to have dist by surrogate predictions
   def y_dist(self,nsamps=None,return_data=False,surrogate=True):
-    def predict_fun(x):
-      ypreds,yvarpreds = self.m.predict(x)
-      return ypreds
-    if return_data:
-      return super().y_dist(nsamps,return_data,surrogate,predict_fun)
-    else:
-      super().y_dist(nsamps,return_data,surrogate,predict_fun)
+    return super().y_dist(nsamps,return_data,surrogate,self.predict)
+
+@ray.remote
+def _parallel_predict(x,predfun):
+  return predfun(x)

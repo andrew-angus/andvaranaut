@@ -20,6 +20,7 @@ setup(
   long_description=long_description,
   long_description_content_type="text/markdown",
 
+  python_requires='>=3.5.9',
   install_requires=[
     "GPy",
     "numpy",
