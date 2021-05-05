@@ -484,14 +484,17 @@ class gp(_surrogate):
   # Method to change noise/kernel attributes, scrubs any saved model
   def change_model(self,kernel,noise):
     kerns = ['RBF','Matern52','Matern32','Exponential']
+    kernstrs = ['rbf','Mat52','Mat32','Exponential']
     if kernel not in kerns:
       raise Exception(f"Error: kernel must be one of {kerns}")
     if not isinstance(noise,bool):
       raise Exception(f"Error: noise must be of type bool")
     self.kernel = kernel
+    self.kernstr = kernstrs[kerns.index(kernel)]
     self.noise = noise
     self.m = None
 
+  # Inherit set_data method and scrub train-test sets
   def set_data(self,x,y):
     super().set_data(x,y)
     self.__scrub_train_test()
@@ -500,6 +503,25 @@ class gp(_surrogate):
   def y_dist(self,nsamps=None,return_data=False,surrogate=True):
     return super().y_dist(nsamps,return_data,surrogate,self.predict)
 
+  # Function which plots relative importances (inverse lengthscales)
+  def relative_importances(self,original_data=False,restarts=3):
+    if original_data:
+      m = self.__fit(mode='original',restarts=restarts)
+    else:
+      m = self.m
+    sens_gp = np.zeros(self.nx)
+    lengcmd = 'm.'+self.kernstr+'.lengthscale[i]'
+    for i in range(self.nx):
+      leng = eval(lengcmd)
+      sens_gp[i] = self.dists[i].mean()/leng
+    plt.bar([f'x[{i}]'for i in range(self.nx)],np.log(sens_gp))
+    plt.ylabel('Relative log importance')
+    plt.show()
+
+
+
+
+# Ray remote function wrap around surrogate prediction
 @ray.remote
 def _parallel_predict(x,predfun):
   return predfun(x)
