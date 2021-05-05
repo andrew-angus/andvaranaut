@@ -132,6 +132,7 @@ class lhc():
   def sample(self,nsamps):
     if not isinstance(nsamps,int) or (nsamps < 1):
       raise Exception("Error: nsamps argument must be an integer > 0")
+    print(f'Evaluating {nsamps} latin hypercube samples...')
     xsamps = self.__latin_sample(nsamps)
     self.__vector_solver(xsamps)
 
@@ -232,9 +233,9 @@ def _parallel_wrap(fun,inp,idx):
  
 # Inherit from LHC class and add data conversion methods
 class _surrogate(lhc):
-  def __init__(self,nx,ny,dists,target,xconrevs=None,yconrevs=None):
+  def __init__(self,xconrevs=None,yconrevs=None,**kwargs,):
     # Call LHC init, then validate and set now data conversion/reversion attributes
-    super().__init__(nx,ny,dists,target)
+    super().__init__(**kwargs)
     self.xc = copy.deepcopy(self.x)
     self.yc = copy.deepcopy(self.y)
     self.__conrev_check(xconrevs,yconrevs)
@@ -343,9 +344,8 @@ class _none_conrev:
 
 # Inherit from surrogate class and add GP specific methods
 class gp(_surrogate):
-  def __init__(self,nx,ny,dists,target,xconrevs=None,yconrevs=None,\
-                kernel='RBF',noise=True):
-    super().__init__(nx,ny,dists,target,xconrevs,yconrevs)
+  def __init__(self,kernel='RBF',noise=True,**kwargs):
+    super().__init__(**kwargs)
     self.change_model(kernel,noise)
     self.__scrub_train_test()
 
@@ -377,16 +377,20 @@ class gp(_surrogate):
     kstring = 'GPy.kern.'+self.kernel+'(input_dim=self.nx,variance=1.,lengthscale=1.,ARD=True)'
     kern = eval(kstring)
     # Fit and return model
+    print('Fitting data...')
+    t0 = stopwatch()
     if not self.noise:
       meps = np.finfo(np.float64).eps
       m = GPy.models.GPRegression(x,y,kern,noise_var=meps,normalizer=True)
       m.likelihood.fix()
     else:
       m = GPy.models.GPRegression(x,y,kern,noise_var=1.0,normalizer=True)
-    if self.parallel:
-      m.optimize_restarts(restarts,parallel=True,num_processes=self.nproc)
-    else:
-      m.optimize_restarts(restarts)
+    t1 = stopwatch()
+    print(f'Time taken: {t1-t0:0.2f} s')
+    print('Optimizing hyperparameters...')
+    m.optimize_restarts(restarts,parallel=self.parallel,num_processes=self.nproc,robust=True)
+    t2 = stopwatch()
+    print(f'Time taken: {t2-t1:0.2f} s')
     return m
 
   # Make train-test split and populate attributes
@@ -395,7 +399,7 @@ class gp(_surrogate):
       train_test_split(self.xc,self.yc,train_size=training_frac)
 
   # Assess GP performance with several test plots and RMSE calcs
-  def test_plots(self,revert=True,restarts=3,yplots=True,xplots=True):
+  def test_plots(self,restarts=3,revert=True,yplots=True,xplots=True):
     # Train model on training set and make predictions on xtest data
     mtrain = self.__fit(mode='train_test',restarts=restarts)
     ypred,ypred_var = mtrain.predict(self.xtest)
