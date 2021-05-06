@@ -43,7 +43,7 @@ def std_normal(x,dist):
   return x
 # Convert positive values to unbounded with logarithm
 def log_con(y):
-  return np.log10(y)
+  return np.log(y)
 # Convert non-negative to unbounded, via intermediate [0,1]
 def nonneg_con(y):
   y01 = y/(1+y)
@@ -54,6 +54,9 @@ def probit_con(x,dist):
   std_norm = st.norm()
   x = std_norm.ppf(xcdf)
   return x
+# Normalise by provided factor
+def normalise_con(y,fac):
+  return y/fac
 
 ## Reversion functions
 
@@ -83,7 +86,8 @@ def normal_rev(x,dist):
   return x
 # Revert logarithm with power
 def log_rev(y):
-  return np.power(10,y)
+  #return np.power(10,y)
+  return np.exp(y)
 # Revert unbounded to non-negative, via intermediate [0,1]
 def nonneg_rev(y):
   y01 = __logistic(y)
@@ -94,6 +98,9 @@ def probit_rev(x,dist):
   xcdf = std_norm.cdf(x)
   x = dist.ppf(xcdf)
   return x
+# Revert standard normalisation
+def normalise_rev(y,fac):
+  return y*fac
 
 # Define class wrappers for matching sets of conversions and reversions
 # Also allows a standard format for use in surrogates without worrying about function arguments
@@ -121,3 +128,7 @@ class logarithm:
   def __init__(self):
     self.con = log_con
     self.rev = log_rev
+class normalise:
+  def __init__(self,fac):
+    self.con = partial(normalise_con,fac=fac)
+    self.rev = partial(normalise_rev,fac=fac)
