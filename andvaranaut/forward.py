@@ -5,7 +5,7 @@ from design import latin_random
 import GPy
 import scipy.stats as st
 from time import time as stopwatch
-from seaborn import kdeplot
+import seaborn as sns
 import matplotlib.pyplot as plt
 import ray
 import multiprocessing as mp
@@ -13,6 +13,7 @@ import os
 import numpy as np
 import copy
 from sklearn.model_selection import train_test_split
+from functools import partial
 
 # Latin hypercube sampler and propagator
 class lhc():
@@ -191,14 +192,19 @@ class lhc():
     else:
       raise Exception("Error: method must be one of 'coarse_lhc','random','specific'")
 
-  # Plot y distribution using kernel density estimation
-  def y_dist(self):
-    self.__y_dist(self.y)
+  # Plot y distribution using kernel density estimation and histogram
+  def y_dist(self,mode='hist_kde'):
+    self.__y_dist(self.y,mode)
 
   # Private y_dist method with more flexibility for inherited class extension
-  def __y_dist(self,y):
+  def __y_dist(self,y,mode):
+    modes = ['hist','kde','ecdf','hist_kde']
+    if mode not in modes:
+      raise Exception(f"Error: selected mode must be one of {modes}")
+    funs = [partial(sns.displot,kind='hist'),partial(sns.displot,kind='kde'),\
+            partial(sns.displot,kind='ecdf'),partial(sns.displot,kind='hist',kde=True)]
     for i in range(self.ny):
-      kdeplot(y[:,i])
+      funs[modes.index(mode)](y[:,i])
       plt.xlabel(f'y[{i}]')
       plt.ylabel('Density')
       plt.show()
@@ -269,7 +275,7 @@ class _surrogate(lhc):
       self.yc = self.yc[returned]
 
   # Allow for changing conversion/reversion methods
-  def change_conrevs(self,xconrevs,yconrevs):
+  def change_conrevs(self,xconrevs=None,yconrevs=None):
     # Check and set new lists, then update converted datasets
     self.__conrev_check(xconrevs,yconrevs)
     for i in range(self.nx):
@@ -314,7 +320,7 @@ class _surrogate(lhc):
     self.__con(len(x))
 
   # Inherit and extend y_dist to have dist by surrogate predictions
-  def y_dist(self,nsamps=None,return_data=False,surrogate=True,predictfun=None):
+  def y_dist(self,mode='hist_kde',nsamps=None,return_data=False,surrogate=True,predictfun=None):
     # Allow for use of surrogate evaluations or underlying datasets
     if surrogate:
       xsamps = super()._lhc__latin_sample(nsamps)
@@ -325,11 +331,13 @@ class _surrogate(lhc):
       yrevs = np.zeros((nsamps,self.ny))
       for i in range(self.ny):
         yrevs[:,i] = self.yconrevs[i].rev(ypreds[:,i])
-      super()._lhc__y_dist(yrevs)
+      amax = np.argmax(ypreds)
+      idx = (amax//self.ny,amax%self.ny)
+      super()._lhc__y_dist(yrevs,mode)
       if return_data:
         return xsamps,yrevs
     elif not surrogate:
-      super().y_dist()
+      super().y_dist(mode)
     else:
       raise Exception("Error: surrogate argument must be of type bool")
 
@@ -414,14 +422,14 @@ class gp(_surrogate):
       cinds = np.r_[0,cinds]
       outs = ray.get([_parallel_predict.remote(\
           x[cinds[i]:cinds[i+1]].reshape((csizes[i],self.nx)),\
-          self.m.predict) for i in range(chunks)]) # Chunks
+          m.predict) for i in range(chunks)]) # Chunks
       ypreds = np.empty((0,self.ny)); yvarpreds = np.empty((0,self.ny))
       for i in range(chunks):
         ypreds = np.r_[ypreds,outs[i][0]]
         yvarpreds = np.r_[yvarpreds,outs[i][1]]
       ray.shutdown()
     else:
-      ypreds,yvarpreds = self.m.predict(x)
+      ypreds,yvarpreds = m.predict(x)
     t1 = stopwatch()
     print(f'Time taken: {t1-t0:0.2f} s')
     if return_var:
@@ -500,8 +508,8 @@ class gp(_surrogate):
     self.__scrub_train_test()
 
   # Inherit and extend y_dist to have dist by surrogate predictions
-  def y_dist(self,nsamps=None,return_data=False,surrogate=True):
-    return super().y_dist(nsamps,return_data,surrogate,self.predict)
+  def y_dist(self,mode='hist_kde',nsamps=None,return_data=False,surrogate=True):
+    return super().y_dist(mode,nsamps,return_data,surrogate,self.predict)
 
   # Function which plots relative importances (inverse lengthscales)
   def relative_importances(self,original_data=False,restarts=3):
