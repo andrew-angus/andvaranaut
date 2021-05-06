@@ -80,7 +80,7 @@ class lhc():
       if lnew != lold:
         lold = lnew
         print(f'Run is {(l-lold)/l:0.1%} complete.',end='\r')
-    ray.shutdown()
+    #ray.shutdown()
     
     # Reshape outputs to 2D array
     outs = np.array(outs).reshape((len(outs),self.ny))
@@ -363,6 +363,68 @@ class gp(_surrogate):
     self.ytrain = None
     self.ytest = None
 
+  # Sample method inherits lhc sampling and adds adaptive sampling option
+  def sample(self,nsamps,method='lhc',batchsize=1,restarts=3):
+    methods = ['lhc','adaptive']
+    if method not in methods:
+      raise Exception(f'Error: method must be one of {methods}')
+    if method == 'lhc':
+      super().sample(nsamps)
+    else:
+      self.__adaptive_sample(nsamps,batchsize,restarts)
+
+  # Adaptive sampler based on Mohammadi, Hossein, et al. 
+  # "Cross-validation based adaptive sampling for Gaussian process models." 
+  # arXiv preprint arXiv:2005.01814 (2020).
+  def __adaptive_sample(self,nsamps,batchsize,restarts):
+    # Determine number of batches and new samples in each batch
+    batches = round(np.ceil(nsamps/batchsize))
+    for i in range(batches):
+      newsamps = np.minimum(nsamps-i*batches,batchsize)
+
+      # Fit GP to current samples
+      self.fit(restarts)
+
+      # Keep hyperparameters and evaluate ESE_loo for each data point
+      csamps = len(self.x)
+      eseloo = np.zeros((csamps,self.ny))
+      print('Calculating ESE_loo...')
+      for j in range(csamps):
+
+        # Delete single sample
+        x_loo = np.delete(self.xc,j,axis=0)
+        y_loo = np.delete(self.yc,j,axis=0)
+
+        # Fit GP using saved hyperparams
+        mloo = self.__fit(x_loo,y_loo,restarts=restarts,opt=False)
+        exstr = 'mloo.'+self.kernstr+'.variance = self.m.'+self.kernstr+'.variance'
+        exec(exstr)
+        exstr = 'mloo.'+self.kernstr+'.lengthscale = self.m.'+self.kernstr+'.lengthscale'
+        exec(exstr)
+        if self.noise:
+          mloo.Gaussian_noise.variance = self.m.Gaussian_noise.variance
+
+        # Predict mean and variance at deleted sample point
+        pr,prvar = mloo.predict(self.xc[j:j+1])
+
+        # Calculate ESE_loo
+        ##Todo: Revert here before calculating ese_loo?
+        for k in range(self.ny):
+          ym = pr[k]; yv = prvar[k]
+          fxi = self.yc[j,k]
+          yse = np.power(ym-fxi,2)
+          Eloo = yv + yse
+          Varloo = 2*yv**2 + 4*yv*yse
+          eseloo[j,k] = Eloo/np.sqrt(Varloo)
+        print(f'Run is {(i*batchsize+j+1))/nsamps:0.1%} complete.',end='\r')
+      print()
+      
+      # Fit auxillary GP to ESE_loo
+      ## Better to initiate separate gp class instance here?
+      print('Fitting auxillary GP to ESE_loo data...')
+      maux = self.__fit(self.xc,eseloo,restarts=restarts)
+      
+
   # Inherit del_samples and extend to remove test-train datasets
   def del_samples(self,ndels=None,method='coarse_lhc',idx=None):
     super().del_samples(ndels,method,idx)
@@ -370,35 +432,26 @@ class gp(_surrogate):
 
   # Fit GP standard method
   def fit(self,restarts=3):
-    self.m = self.__fit(mode='converted',restarts=restarts)
+    self.m = self.__fit(self.xc,self.yc,restarts=restarts)
 
   # More flexible private fit method which can use unconverted or train-test datasets
-  def __fit(self,mode,restarts=3):
-    # Select datasets
-    if mode == 'converted':
-      x = self.xc; y = self.yc
-    elif mode == 'original':
-      x = self.x; y = self.y
-    elif mode == 'train_test':
-      x = self.xtrain; y = self.ytrain
+  def __fit(self,x,y,restarts=3,opt=True):
     # Get correct GPy kernel
     kstring = 'GPy.kern.'+self.kernel+'(input_dim=self.nx,variance=1.,lengthscale=1.,ARD=True)'
     kern = eval(kstring)
     # Fit and return model
-    print('Fitting data...')
-    t0 = stopwatch()
     if not self.noise:
       meps = np.finfo(np.float64).eps
       m = GPy.models.GPRegression(x,y,kern,noise_var=meps,normalizer=True)
       m.likelihood.fix()
     else:
       m = GPy.models.GPRegression(x,y,kern,noise_var=1.0,normalizer=True)
-    t1 = stopwatch()
-    print(f'Time taken: {t1-t0:0.2f} s')
-    print('Optimizing hyperparameters...')
-    m.optimize_restarts(restarts,parallel=self.parallel,num_processes=self.nproc,robust=True)
-    t2 = stopwatch()
-    print(f'Time taken: {t2-t1:0.2f} s')
+    if opt:
+      t0 = stopwatch()
+      print('Optimizing hyperparameters...')
+      m.optimize_restarts(restarts,parallel=self.parallel,num_processes=self.nproc,robust=True)
+      t1 = stopwatch()
+      print(f'Time taken: {t1-t0:0.2f} s')
     return m
 
   # Standard predict method which wraps the GPy predict and allows for parallelism
@@ -427,7 +480,7 @@ class gp(_surrogate):
       for i in range(chunks):
         ypreds = np.r_[ypreds,outs[i][0]]
         yvarpreds = np.r_[yvarpreds,outs[i][1]]
-      ray.shutdown()
+      #ray.shutdown()
     else:
       ypreds,yvarpreds = m.predict(x)
     t1 = stopwatch()
@@ -445,7 +498,7 @@ class gp(_surrogate):
   # Assess GP performance with several test plots and RMSE calcs
   def test_plots(self,restarts=3,revert=True,yplots=True,xplots=True):
     # Train model on training set and make predictions on xtest data
-    mtrain = self.__fit(mode='train_test',restarts=restarts)
+    mtrain = self.__fit(self.xtrain,self.ytrain,restarts=restarts)
     #ypred,ypred_var = mtrain.predict(self.xtest)
     ypred = self.__predict(mtrain,self.xtest,return_var=False)
     # Either revert data to original for comparison or leave as is
@@ -514,7 +567,7 @@ class gp(_surrogate):
   # Function which plots relative importances (inverse lengthscales)
   def relative_importances(self,original_data=False,restarts=3):
     if original_data:
-      m = self.__fit(mode='original',restarts=restarts)
+      m = self.__fit(self.x,self.y,restarts=restarts)
     else:
       m = self.m
     sens_gp = np.zeros(self.nx)
@@ -525,9 +578,6 @@ class gp(_surrogate):
     plt.bar([f'x[{i}]'for i in range(self.nx)],np.log(sens_gp))
     plt.ylabel('Relative log importance')
     plt.show()
-
-
-
 
 # Ray remote function wrap around surrogate prediction
 @ray.remote
