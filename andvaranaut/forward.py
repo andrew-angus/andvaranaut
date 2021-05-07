@@ -285,7 +285,6 @@ class _surrogate(lhc):
 
   # Converison/reversion input checking and setting (used in __init__ and change_conrevs)
   def __conrev_check(self,xconrevs,yconrevs):
-    flag = False
     if xconrevs is None:
       xconrevs = [None for i in range(self.nx)]
     if yconrevs is None:
@@ -305,10 +304,6 @@ class _surrogate(lhc):
           xconrevs[j] = _none_conrev()
         else:
           yconrevs[j-self.nx] = _none_conrev()
-        if not flag:
-          flag = True
-          print("Warning: One or more data conversion/reversion method is None.",\
-              "This may affect surrogate performance.")
     self.xconrevs = xconrevs
     self.yconrevs = yconrevs
 
@@ -356,6 +351,7 @@ class gp(_surrogate):
     super().__init__(**kwargs)
     self.change_model(kernel,noise)
     self.__scrub_train_test()
+    self._xRF = None
 
   def __scrub_train_test(self):
     self.xtrain = None
@@ -397,10 +393,8 @@ class gp(_surrogate):
 
         # Fit GP using saved hyperparams
         mloo = self.__fit(x_loo,y_loo,restarts=restarts,opt=False)
-        exstr = 'mloo.'+self.kernstr+'.variance = self.m.'+self.kernstr+'.variance'
-        exec(exstr)
-        exstr = 'mloo.'+self.kernstr+'.lengthscale = self.m.'+self.kernstr+'.lengthscale'
-        exec(exstr)
+        mloo.kern.variance = self.m.kern.variance
+        mloo.kern.lengthscale = self.m.kern.lengthscale
         if self.noise:
           mloo.Gaussian_noise.variance = self.m.Gaussian_noise.variance
 
@@ -410,19 +404,101 @@ class gp(_surrogate):
         # Calculate ESE_loo
         ##Todo: Revert here before calculating ese_loo?
         for k in range(self.ny):
-          ym = pr[k]; yv = prvar[k]
+          ym = pr[0,k]; yv = prvar[0,k]
           fxi = self.yc[j,k]
           yse = np.power(ym-fxi,2)
           Eloo = yv + yse
           Varloo = 2*yv**2 + 4*yv*yse
           eseloo[j,k] = Eloo/np.sqrt(Varloo)
-        print(f'Run is {(i*batchsize+j+1))/nsamps:0.1%} complete.',end='\r')
+        print(f'{(j+1)/csamps:0.1%} complete.',end='\r')
       print()
       
       # Fit auxillary GP to ESE_loo
       ## Better to initiate separate gp class instance here?
       print('Fitting auxillary GP to ESE_loo data...')
-      maux = self.__fit(self.xc,eseloo,restarts=restarts)
+      gpaux = gp(kernel='Matern32',noise=False,nx=self.nx,ny=self.ny,\
+                 xconrevs=self.xconrevs,yconrevs=None,parallel=self.parallel,\
+                 nproc=self.nproc,dists=self.dists,target=self.target)
+      gpaux.set_data(self.x,eseloo)
+      gpaux.fit(restarts=restarts)
+      print(gpaux.y)
+      #maux = self.__fit(self.xc,eseloo,restarts=restarts)
+      gpaux.test_plots()
+  
+      # Create repulsive function extended dataset
+
+      # Get sample batch
+      for j in range(newsamps):
+        pass
+        # Maximise PEI to get next sample then add to RF data
+
+      # Evaluate function at sample points and add to database
+
+  # Private method for calculation of kernel argument
+  def __r(self,x1,x2):
+    lengs = np.zeros(self.nx)
+    lengs[:] = self.m.kern.lengthscale
+    r = np.sqrt(np.dot((x1-x2)**2,1/lengs**2))
+    return r
+
+  # Private method for evaluating kernel on two points in input space
+  def __K(self,x1,x2):
+    r = self.__r(x1,x2)
+    return self.m.kern.K_of_r(r)
+
+  # Expected improvement function
+  def __EI(x):
+    pr,prvar = maux.predict(np.array([x]))
+    ydev = np.sqrt(prvar[0,0])
+    if ydev < devthresh:
+      return 0
+    else:
+      ydiff = pr[0,0]-maxye
+      u = ydiff/ydev
+      return ydiff*stdnorm.cdf(u)+ydev*stdnorm.pdf(u)
+    maxye = np.max(eseloo)
+    devthresh = 1e-4
+    stdnorm = st.norm()
+
+  # Add pseudo-points to RF set
+  # Returns array of corner coords for an n dimensional cube
+  def __corners(n,a=None):
+    if a is None:
+      a = np.zeros(n)
+      top = True
+    if n > 1:
+      b = np.empty((0,len(a)))
+      for i in range(2):
+        a[n-1] = i%2
+        b = np.r_[b,corners(n-1,a)]
+    else:
+      b = np.zeros((2,len(a)))
+      for i in range(2):
+        a[n-1] = i%2
+        b[i] = a
+    return b
+    corners = _corners(self.nx)
+    # Find points on faces of input space nearest existing points
+    edges = np.empty((self.nx*2,self.nx))
+    for i in range(nvars):
+      edges[i*2] = fullx[np.argmin(fullx[:,i])]
+      edges[i*2,i] = 0.0
+      edges[i*2+1] = fullx[np.argmax(fullx[:,i])]
+      edges[i*2+1,i] = 1.0
+      xRF = np.r_[fullx,corners,edges]
+
+  # RF function
+  def __RF(self,x):
+    prod = 1.0
+    for i in self._xRF:
+       prod *= 1-self.__K(x,i)/self.m.kern.variance
+      #prod += np.log(1-ExpKern(x,i))
+    return prod
+
+  # Pseudo-expected improvement func
+  def __PEI(self,x):
+  #   return -(np.log(EI(x))+np.log(RF(x)))
+    return EI(x)*RF(x)
       
 
   # Inherit del_samples and extend to remove test-train datasets
@@ -497,6 +573,9 @@ class gp(_surrogate):
 
   # Assess GP performance with several test plots and RMSE calcs
   def test_plots(self,restarts=3,revert=True,yplots=True,xplots=True):
+    # Creat train-test sets if none exist
+    if self.xtrain is None:
+      self.train_test()
     # Train model on training set and make predictions on xtest data
     mtrain = self.__fit(self.xtrain,self.ytrain,restarts=restarts)
     #ypred,ypred_var = mtrain.predict(self.xtest)
@@ -545,13 +624,11 @@ class gp(_surrogate):
   # Method to change noise/kernel attributes, scrubs any saved model
   def change_model(self,kernel,noise):
     kerns = ['RBF','Matern52','Matern32','Exponential']
-    kernstrs = ['rbf','Mat52','Mat32','Exponential']
     if kernel not in kerns:
       raise Exception(f"Error: kernel must be one of {kerns}")
     if not isinstance(noise,bool):
       raise Exception(f"Error: noise must be of type bool")
     self.kernel = kernel
-    self.kernstr = kernstrs[kerns.index(kernel)]
     self.noise = noise
     self.m = None
 
@@ -571,9 +648,8 @@ class gp(_surrogate):
     else:
       m = self.m
     sens_gp = np.zeros(self.nx)
-    lengcmd = 'm.'+self.kernstr+'.lengthscale[i]'
     for i in range(self.nx):
-      leng = eval(lengcmd)
+      leng = m.kern.lengthscale[i]
       sens_gp[i] = self.dists[i].mean()/leng
     plt.bar([f'x[{i}]'for i in range(self.nx)],np.log(sens_gp))
     plt.ylabel('Relative log importance')
