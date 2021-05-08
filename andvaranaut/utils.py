@@ -29,7 +29,7 @@ def __logit(x):
 def logit(x,dist):
   # Convert uniform distribution samples to standard uniform [0,1]
   # and logit transform to unbounded range 
-  x01 = std_uniform(x,dist)
+  x01 = cdf_con(x,dist)
   x = __logit(x01)
   return x
 # Convert uniform dist samples into standard uniform 
@@ -50,9 +50,13 @@ def nonneg_con(y):
   return  __logit(y01)
 # Probit transform to standard normal using scipy dist
 def probit_con(x,dist):
-  xcdf = dist.cdf(x)
   std_norm = st.norm()
-  x = std_norm.ppf(xcdf)
+  xcdf = np.where(x<0,1-dist.sf(x),dist.cdf(x))
+  x = np.where(xcdf<0.5,std_norm.isf(1-xcdf),std_norm.ppf(xcdf))
+  return x
+# Transform any dist to standard uniform using cdf
+def cdf_con(x,dist):
+  x = np.where(x<dist.mean(),1-dist.sf(x),dist.cdf(x))
   return x
 # Normalise by provided factor
 def normalise_con(y,fac):
@@ -73,7 +77,7 @@ def __logistic(x):
 # Logistic transform using uniform dists
 def logistic(x,dist):
   x01 = __logistic(x)
-  x = uniform_rev(x01,dist)
+  x = cdf_rev(x01,dist)
   return x
 # Revert to original uniform distributions
 def uniform_rev(x,dist):
@@ -95,8 +99,12 @@ def nonneg_rev(y):
 # Reverse probit transform from standard normal using scipy dist
 def probit_rev(x,dist):
   std_norm = st.norm()
-  xcdf = std_norm.cdf(x)
-  x = dist.ppf(xcdf)
+  xcdf = np.where(x<0,1-std_norm.sf(x),std_norm.cdf(x))
+  x = np.where(xcdf<0.5,dist.isf(1-xcdf),dist.ppf(xcdf))
+  return x
+# Transform any dist to standard uniform using cdf
+def cdf_rev(x,dist):
+  x = np.where(x<0.5,dist.isf(1-x),dist.ppf(x))
   return x
 # Revert standard normalisation
 def normalise_rev(y,fac):
@@ -120,6 +128,10 @@ class probit:
   def __init__(self,dist):
     self.con = partial(probit_con,dist=dist)
     self.rev = partial(probit_rev,dist=dist)
+class cdf:
+  def __init__(self,dist):
+    self.con = partial(cdf_con,dist=dist)
+    self.rev = partial(cdf_rev,dist=dist)
 class nonneg:
   def __init__(self):
     self.con = nonneg_con
