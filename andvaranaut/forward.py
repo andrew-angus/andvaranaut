@@ -15,6 +15,7 @@ import copy
 from sklearn.model_selection import train_test_split
 from functools import partial
 from scipy.optimize import minimize
+from andvaranaut.utils import cdf
 
 # Latin hypercube sampler and propagator
 class lhc():
@@ -368,6 +369,8 @@ class gp(_surrogate):
     if method == 'lhc':
       super().sample(nsamps)
     else:
+      if self.x.shape[0] < 2:
+        raise Exception("Error: require at least 2 LHC samples to perform adaptive sampling.")
       self.__adaptive_sample(nsamps,batchsize,restarts)
 
   # Adaptive sampler based on Mohammadi, Hossein, et al. 
@@ -418,10 +421,11 @@ class gp(_surrogate):
       ## Better to initiate separate gp class instance here?
       print('Fitting auxillary GP to ESE_loo data...')
       gpaux = gp(kernel='RBF',noise=False,nx=self.nx,ny=self.ny,\
-                 xconrevs=None,yconrevs=None,parallel=self.parallel,\
-                 nproc=self.nproc,dists=[st.norm() for i in range(self.nx)],\
+                 xconrevs=[cdf(self.dists[i]) for i in range(self.nx)],yconrevs=None,\
+                 parallel=self.parallel,\
+                 nproc=self.nproc,dists=self.dists,\
                  target=self.target)
-      gpaux.set_data(self.xc,eseloo)
+      gpaux.set_data(self.x,eseloo)
       gpaux.fit(restarts=restarts)
 
       # Check lengthscales are not too small
@@ -436,7 +440,7 @@ class gp(_surrogate):
       gpaux.test_plots(opt=False)
 
       # Create repulsive function dataset
-      self.__create_xRF()
+      gpaux._gp__create_xRF()
 
       # Get sample batch
       for j in range(newsamps):
@@ -457,49 +461,28 @@ class gp(_surrogate):
     xmins = np.array([np.min(self.xc[:,i]) for i in range(self.nx)])
     return np.linalg.norm(xmaxs-xmins)
 
+  # Create repulsive function dataset
   def __create_xRF(self):
+    # Existing dataset
     self._xRF = copy.deepcopy(self.xc)
-
-  # Expected improvement function
-  def __EI(x):
-    pr,prvar = maux.predict(np.array([x]))
-    ydev = np.sqrt(prvar[0,0])
-    if ydev < devthresh:
-      return 0
-    else:
-      ydiff = pr[0,0]-maxye
-      u = ydiff/ydev
-      return ydiff*stdnorm.cdf(u)+ydev*stdnorm.pdf(u)
-    maxye = np.max(eseloo)
-    devthresh = 1e-4
-    stdnorm = st.norm()
-
-  # Add pseudo-points to RF set
-  # Returns array of corner coords for an n dimensional cube
-  def __corners(n,a=None):
-    if a is None:
-      a = np.zeros(n)
-      top = True
-    if n > 1:
-      b = np.empty((0,len(a)))
-      for i in range(2):
-        a[n-1] = i%2
-        b = np.r_[b,corners(n-1,a)]
-    else:
-      b = np.zeros((2,len(a)))
-      for i in range(2):
-        a[n-1] = i%2
-        b[i] = a
-    return b
-    corners = _corners(self.nx)
-    # Find points on faces of input space nearest existing points
-    edges = np.empty((self.nx*2,self.nx))
-    for i in range(nvars):
-      edges[i*2] = fullx[np.argmin(fullx[:,i])]
-      edges[i*2,i] = 0.0
-      edges[i*2+1] = fullx[np.argmax(fullx[:,i])]
-      edges[i*2+1,i] = 1.0
-      xRF = np.r_[fullx,corners,edges]
+    # Add corners of input space
+    xmaxs = np.array([self.xconrevs[i].con(self.dists[i].ppf(1))\
+        for i in range(self.nx)])
+    xmins = np.array([self.xconrevs[i].con(self.dists[i].isf(1))\
+        for i in range(self.nx)])
+    xmaxmins = ([xmaxs[i],xmins[i]] for i in range(self.nx))
+    xgrid = np.meshgrid(*xmaxmins)
+    xcoords = np.array(list(zip(*(i.flat for i in xgrid))))
+    self._xRF = np.r_[self._xRF,xcoords]
+    # Add closest boundary points to current dataset
+    amaxs = np.argmax(self.xc,axis=0)
+    amins = np.argmin(self.xc,axis=0)
+    xmaxds = self.xc[amaxs]
+    xminds = self.xc[amins]
+    for i in range(self.nx):
+      xmaxds[i,i] = xmaxs[i]
+      xminds[i,i] = xmins[i]
+    self._xRF = np.r_[self._xRF,xmaxds,xminds]
 
   # RF function
   def __RF(self,x):
@@ -510,11 +493,24 @@ class gp(_surrogate):
       #prod += np.log(1-ExpKern(x,i))
     return prod
 
+  # Expected improvement function
+  def __EI(x):
+    maxye = np.max(eseloo)
+    devthresh = 1e-4
+    stdnorm = st.norm()
+    pr,prvar = maux.predict(np.array([x]))
+    ydev = np.sqrt(prvar[0,0])
+    if ydev < devthresh:
+      return 0
+    else:
+      ydiff = pr[0,0]-maxye
+      u = ydiff/ydev
+      return ydiff*stdnorm.cdf(u)+ydev*stdnorm.pdf(u)
+
   # Pseudo-expected improvement func
   def __PEI(self,x):
   #   return -(np.log(EI(x))+np.log(RF(x)))
     return EI(x)*RF(x)
-      
 
   # Inherit del_samples and extend to remove test-train datasets
   def del_samples(self,ndels=None,method='coarse_lhc',idx=None):
