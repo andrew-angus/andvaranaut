@@ -14,6 +14,7 @@ import numpy as np
 import copy
 from sklearn.model_selection import train_test_split
 from functools import partial
+from scipy.optimize import minimize
 
 # Latin hypercube sampler and propagator
 class lhc():
@@ -416,16 +417,26 @@ class gp(_surrogate):
       # Fit auxillary GP to ESE_loo
       ## Better to initiate separate gp class instance here?
       print('Fitting auxillary GP to ESE_loo data...')
-      gpaux = gp(kernel='Matern32',noise=False,nx=self.nx,ny=self.ny,\
-                 xconrevs=self.xconrevs,yconrevs=None,parallel=self.parallel,\
-                 nproc=self.nproc,dists=self.dists,target=self.target)
-      gpaux.set_data(self.x,eseloo)
+      gpaux = gp(kernel='RBF',noise=False,nx=self.nx,ny=self.ny,\
+                 xconrevs=None,yconrevs=None,parallel=self.parallel,\
+                 nproc=self.nproc,dists=[st.norm() for i in range(self.nx)],\
+                 target=self.target)
+      gpaux.set_data(self.xc,eseloo)
       gpaux.fit(restarts=restarts)
-      print(gpaux.y)
-      #maux = self.__fit(self.xc,eseloo,restarts=restarts)
-      gpaux.test_plots()
-  
-      # Create repulsive function extended dataset
+
+      # Check lengthscales are not too small
+      # Min lengthscale estimated using current x dataset
+      maxrscaled = gpaux._gp__K_of_r_root()
+      maxr = self.__max_distance()
+      minl = maxr/maxrscaled
+      for i in range(self.nx):
+        if gpaux.m.kern.lengthscale[i] < minl:
+          gpaux.m.kern.lengthscale[i] = minl
+      print(gpaux.m[''])
+      gpaux.test_plots(opt=False)
+
+      # Create repulsive function dataset
+      self.__create_xRF()
 
       # Get sample batch
       for j in range(newsamps):
@@ -434,17 +445,20 @@ class gp(_surrogate):
 
       # Evaluate function at sample points and add to database
 
-  # Private method for calculation of kernel argument
-  def __r(self,x1,x2):
-    lengs = np.zeros(self.nx)
-    lengs[:] = self.m.kern.lengthscale
-    r = np.sqrt(np.dot((x1-x2)**2,1/lengs**2))
-    return r
+  # Function for finding r which gives Kroot
+  def __K_of_r_root(self,Kroot=1e-8):
+    def min_fun(r,Kroot):
+      return np.abs(self.m.kern.K_of_r(r)-Kroot)
+    return minimize(min_fun,1.0,args=Kroot,tol=Kroot/100).x[0]
 
-  # Private method for evaluating kernel on two points in input space
-  def __K(self,x1,x2):
-    r = self.__r(x1,x2)
-    return self.m.kern.K_of_r(r)
+  # Function for approximating max distance between points in dataset
+  def __max_distance(self):
+    xmaxs = np.array([np.max(self.xc[:,i]) for i in range(self.nx)])
+    xmins = np.array([np.min(self.xc[:,i]) for i in range(self.nx)])
+    return np.linalg.norm(xmaxs-xmins)
+
+  def __create_xRF(self):
+    self._xRF = copy.deepcopy(self.xc)
 
   # Expected improvement function
   def __EI(x):
@@ -491,7 +505,8 @@ class gp(_surrogate):
   def __RF(self,x):
     prod = 1.0
     for i in self._xRF:
-       prod *= 1-self.__K(x,i)/self.m.kern.variance
+      i = np.expand_dims(i,axis=0)
+      prod *= 1-self.m.kern.K(x,i)[0,0]/self.m.kern.variance[0]
       #prod += np.log(1-ExpKern(x,i))
     return prod
 
@@ -572,12 +587,14 @@ class gp(_surrogate):
       train_test_split(self.xc,self.yc,train_size=training_frac)
 
   # Assess GP performance with several test plots and RMSE calcs
-  def test_plots(self,restarts=3,revert=True,yplots=True,xplots=True):
+  def test_plots(self,restarts=3,revert=True,yplots=True,xplots=True,opt=True):
     # Creat train-test sets if none exist
     if self.xtrain is None:
       self.train_test()
     # Train model on training set and make predictions on xtest data
-    mtrain = self.__fit(self.xtrain,self.ytrain,restarts=restarts)
+    mtrain = self.__fit(self.xtrain,self.ytrain,restarts=restarts,opt=opt)
+    if not opt and self.m is not None:
+      mtrain.kern.lengthscale = self.m.kern.lengthscale
     #ypred,ypred_var = mtrain.predict(self.xtest)
     ypred = self.__predict(mtrain,self.xtest,return_var=False)
     # Either revert data to original for comparison or leave as is
