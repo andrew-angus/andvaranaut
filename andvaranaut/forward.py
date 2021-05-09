@@ -362,7 +362,7 @@ class gp(_surrogate):
     self.ytest = None
 
   # Sample method inherits lhc sampling and adds adaptive sampling option
-  def sample(self,nsamps,method='lhc',batchsize=1,restarts=3):
+  def sample(self,nsamps,method='lhc',batchsize=1,restarts=10):
     methods = ['lhc','adaptive']
     if method not in methods:
       raise Exception(f'Error: method must be one of {methods}')
@@ -380,7 +380,7 @@ class gp(_surrogate):
     # Determine number of batches and new samples in each batch
     batches = round(np.ceil(nsamps/batchsize))
     for i in range(batches):
-      newsamps = np.minimum(nsamps-i*batches,batchsize)
+      newsamps = np.minimum(nsamps-i*batchsize,batchsize)
 
       # Fit GP to current samples
       self.fit(restarts)
@@ -409,11 +409,11 @@ class gp(_surrogate):
         # Calculate ESE_loo
         ##Todo: Revert here before calculating ese_loo?
         for k in range(self.ny):
-          #ym = pr[0,k]; yv = prvar[0,k]
-          ym = self.yconrevs[k].rev(pr[0,k])
-          yv = self.yconrevs[k].rev(np.sqrt(prvar[0,k]))**2
-          #fxi = self.yc[j,k]
-          fxi = self.y[j,k]
+          ym = pr[0,k]; yv = prvar[0,k]
+          #ym = self.yconrevs[k].rev(pr[0,k])
+          #yv = self.yconrevs[k].rev(np.sqrt(prvar[0,k]))**2
+          fxi = self.yc[j,k]
+          #fxi = self.y[j,k]
           yse = np.power(ym-fxi,2)
           Eloo = yv + yse
           Varloo = 2*yv**2 + 4*yv*yse
@@ -424,45 +424,29 @@ class gp(_surrogate):
       
       # Fit auxillary GP to ESE_loo
       print('Fitting auxillary GP to ESE_loo data...')
+      xconrevs = [cdf(self.dists[j]) for j in range(self.nx)]
+      yconrevs = [_none_conrev() for j in range(self.ny)]
       gpaux = gp(kernel='RBF',noise=False,nx=self.nx,ny=self.ny,\
-                 xconrevs=[cdf(self.dists[i]) for i in range(self.nx)],yconrevs=None,\
+                 xconrevs=xconrevs,yconrevs=yconrevs,\
                  parallel=self.parallel,\
                  nproc=self.nproc,dists=self.dists,\
                  target=self.target)
       gpaux.set_data(self.x,eseloo)
-      maxrscaled = gpaux._gp__K_of_r_root()
-      minl = 1.0/maxrscaled
-      gpaux.m.kern.lengthscale.constrain_bounded(minl,1e6,warning=False)
-      gpaux.fit(restarts=restarts)
-
-      # Check lengthscales are not too small
-      ## Better to check before fitting and fit with constrains??
-      # Min lengthscale estimated using current x dataset
-      #maxr = np.sqrt(self.nx)
-      maxr = 1.0
-      for j in range(self.nx):
-        if gpaux.m.kern.lengthscale[j] < minl:
-          gpaux.m.kern.lengthscale[j] = minl
-      #print(gpaux.m[''])
-      gpaux.test_plots(opt=False)
+      gpaux.m = gpaux._gp__fit(gpaux.xc,gpaux.yc,restarts=restarts,minl=True)
 
       # Create repulsive function dataset
       gpaux._gp__create_xRF()
 
       # Get sample batch
       xsamps = np.zeros((newsamps,self.nx))
-      bnds = tuple((0,1) for i in range(self.nx))
+      bnds = tuple((0,1) for j in range(self.nx))
       print('Getting batch of samples...')
-      print(gpaux.xc[np.argmax(gpaux.yc,axis=0)])
       t0 = stopwatch()
       for j in range(newsamps):
         # Maximise PEI to get next sample then add to RF data
         res = differential_evolution(gpaux._gp__PEI,bounds=bnds)
-        print(res.x,res.fun)
         x1 = np.expand_dims(res.x,axis=0)
         x2 = np.random.rand(1,self.nx)
-        print(gpaux._gp__EI(x1),gpaux._gp__RF(x1))
-        print(gpaux._gp__EI(x2),gpaux._gp__RF(x2))
         gpaux._xRF = np.r_[gpaux._xRF,x1]
         xsamps[j] = res.x
         print(f'{(j+1)/newsamps:0.1%} complete.',end='\r')
@@ -473,6 +457,11 @@ class gp(_surrogate):
       plt.show()
 
       # Evaluate function at sample points and add to database
+      print("Evaluating function at sample points")
+      for j in range(self.nx):
+        xsamps[:,j] = gpaux.xconrevs[j].rev(xsamps[:,j])
+      self._lhc__vector_solver(xsamps)
+      self._surrogate__con(newsamps)
 
   # Function for finding r which gives Kroot
   def __K_of_r_root(self,Kroot=1e-8):
@@ -545,11 +534,11 @@ class gp(_surrogate):
     self.__scrub_train_test()
 
   # Fit GP standard method
-  def fit(self,restarts=3):
+  def fit(self,restarts=10):
     self.m = self.__fit(self.xc,self.yc,restarts=restarts)
 
   # More flexible private fit method which can use unconverted or train-test datasets
-  def __fit(self,x,y,restarts=3,opt=True):
+  def __fit(self,x,y,restarts=10,opt=True,minl=False):
     # Get correct GPy kernel
     kstring = 'GPy.kern.'+self.kernel+'(input_dim=self.nx,variance=1.,lengthscale=1.,ARD=True)'
     kern = eval(kstring)
@@ -562,6 +551,11 @@ class gp(_surrogate):
       m = GPy.models.GPRegression(x,y,kern,noise_var=1.0,normalizer=True)
     if opt:
       t0 = stopwatch()
+      if minl:
+        self.m = m
+        maxrscaled = self.__K_of_r_root()
+        minl = 1.0/maxrscaled
+        m.kern.lengthscale.constrain_bounded(minl,1e6,warning=False)
       print('Optimizing hyperparameters...')
       m.optimize_restarts(restarts,parallel=self.parallel,num_processes=self.nproc,robust=True)
       t1 = stopwatch()
@@ -610,7 +604,7 @@ class gp(_surrogate):
       train_test_split(self.xc,self.yc,train_size=training_frac)
 
   # Assess GP performance with several test plots and RMSE calcs
-  def test_plots(self,restarts=3,revert=True,yplots=True,xplots=True,opt=True):
+  def test_plots(self,restarts=10,revert=True,yplots=True,xplots=True,opt=True):
     # Creat train-test sets if none exist
     if self.xtrain is None:
       self.train_test()
@@ -699,3 +693,4 @@ class gp(_surrogate):
 @ray.remote
 def _parallel_predict(x,predfun):
   return predfun(x)
+
