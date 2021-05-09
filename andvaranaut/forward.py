@@ -14,7 +14,7 @@ import numpy as np
 import copy
 from sklearn.model_selection import train_test_split
 from functools import partial
-from scipy.optimize import minimize
+from scipy.optimize import minimize,differential_evolution,dual_annealing,shgo
 from andvaranaut.utils import cdf
 
 # Latin hypercube sampler and propagator
@@ -389,6 +389,7 @@ class gp(_surrogate):
       csamps = len(self.x)
       eseloo = np.zeros((csamps,self.ny))
       print('Calculating ESE_loo...')
+      t0 = stopwatch()
       for j in range(csamps):
 
         # Delete single sample
@@ -408,17 +409,20 @@ class gp(_surrogate):
         # Calculate ESE_loo
         ##Todo: Revert here before calculating ese_loo?
         for k in range(self.ny):
-          ym = pr[0,k]; yv = prvar[0,k]
-          fxi = self.yc[j,k]
+          #ym = pr[0,k]; yv = prvar[0,k]
+          ym = self.yconrevs[k].rev(pr[0,k])
+          yv = self.yconrevs[k].rev(np.sqrt(prvar[0,k]))**2
+          #fxi = self.yc[j,k]
+          fxi = self.y[j,k]
           yse = np.power(ym-fxi,2)
           Eloo = yv + yse
           Varloo = 2*yv**2 + 4*yv*yse
           eseloo[j,k] = Eloo/np.sqrt(Varloo)
         print(f'{(j+1)/csamps:0.1%} complete.',end='\r')
-      print()
+      t1 = stopwatch()
+      print(f'Time taken: {t1-t0:0.2f} s')
       
       # Fit auxillary GP to ESE_loo
-      ## Better to initiate separate gp class instance here?
       print('Fitting auxillary GP to ESE_loo data...')
       gpaux = gp(kernel='RBF',noise=False,nx=self.nx,ny=self.ny,\
                  xconrevs=[cdf(self.dists[i]) for i in range(self.nx)],yconrevs=None,\
@@ -426,26 +430,47 @@ class gp(_surrogate):
                  nproc=self.nproc,dists=self.dists,\
                  target=self.target)
       gpaux.set_data(self.x,eseloo)
+      maxrscaled = gpaux._gp__K_of_r_root()
+      minl = 1.0/maxrscaled
+      gpaux.m.kern.lengthscale.constrain_bounded(minl,1e6,warning=False)
       gpaux.fit(restarts=restarts)
 
       # Check lengthscales are not too small
+      ## Better to check before fitting and fit with constrains??
       # Min lengthscale estimated using current x dataset
-      maxrscaled = gpaux._gp__K_of_r_root()
-      maxr = self.__max_distance()
-      minl = maxr/maxrscaled
-      for i in range(self.nx):
-        if gpaux.m.kern.lengthscale[i] < minl:
-          gpaux.m.kern.lengthscale[i] = minl
-      print(gpaux.m[''])
+      #maxr = np.sqrt(self.nx)
+      maxr = 1.0
+      for j in range(self.nx):
+        if gpaux.m.kern.lengthscale[j] < minl:
+          gpaux.m.kern.lengthscale[j] = minl
+      #print(gpaux.m[''])
       gpaux.test_plots(opt=False)
 
       # Create repulsive function dataset
       gpaux._gp__create_xRF()
 
       # Get sample batch
+      xsamps = np.zeros((newsamps,self.nx))
+      bnds = tuple((0,1) for i in range(self.nx))
+      print('Getting batch of samples...')
+      print(gpaux.xc[np.argmax(gpaux.yc,axis=0)])
+      t0 = stopwatch()
       for j in range(newsamps):
-        pass
         # Maximise PEI to get next sample then add to RF data
+        res = differential_evolution(gpaux._gp__PEI,bounds=bnds)
+        print(res.x,res.fun)
+        x1 = np.expand_dims(res.x,axis=0)
+        x2 = np.random.rand(1,self.nx)
+        print(gpaux._gp__EI(x1),gpaux._gp__RF(x1))
+        print(gpaux._gp__EI(x2),gpaux._gp__RF(x2))
+        gpaux._xRF = np.r_[gpaux._xRF,x1]
+        xsamps[j] = res.x
+        print(f'{(j+1)/newsamps:0.1%} complete.',end='\r')
+      t1 = stopwatch()
+      print(f'Time taken: {t1-t0:0.2f} s')
+      plt.scatter(gpaux.xc[:,0],gpaux.xc[:,1])
+      plt.scatter(xsamps[:,0],xsamps[:,1])
+      plt.show()
 
       # Evaluate function at sample points and add to database
 
@@ -454,12 +479,6 @@ class gp(_surrogate):
     def min_fun(r,Kroot):
       return np.abs(self.m.kern.K_of_r(r)-Kroot)
     return minimize(min_fun,1.0,args=Kroot,tol=Kroot/100).x[0]
-
-  # Function for approximating max distance between points in dataset
-  def __max_distance(self):
-    xmaxs = np.array([np.max(self.xc[:,i]) for i in range(self.nx)])
-    xmins = np.array([np.min(self.xc[:,i]) for i in range(self.nx)])
-    return np.linalg.norm(xmaxs-xmins)
 
   # Create repulsive function dataset
   def __create_xRF(self):
@@ -487,30 +506,38 @@ class gp(_surrogate):
   # RF function
   def __RF(self,x):
     prod = 1.0
+    #prod = 0.0
     for i in self._xRF:
       i = np.expand_dims(i,axis=0)
       prod *= 1-self.m.kern.K(x,i)[0,0]/self.m.kern.variance[0]
-      #prod += np.log(1-ExpKern(x,i))
+      #prod += np.log(1-self.m.kern.K(x,i)[0,0]/self.m.kern.variance[0])
     return prod
 
   # Expected improvement function
-  def __EI(x):
-    maxye = np.max(eseloo)
+  # If multiple outputs average EI is returned
+  def __EI(self,x):
+    maxye = np.max(self.yc)
     devthresh = 1e-4
     stdnorm = st.norm()
-    pr,prvar = maux.predict(np.array([x]))
-    ydev = np.sqrt(prvar[0,0])
-    if ydev < devthresh:
-      return 0
-    else:
-      ydiff = pr[0,0]-maxye
-      u = ydiff/ydev
-      return ydiff*stdnorm.cdf(u)+ydev*stdnorm.pdf(u)
+    pr,prvar = self.m.predict(x)
+    EIs = np.zeros(self.ny)
+    for i in range(self.ny):
+      ydev = np.sqrt(prvar[0,i])
+      if ydev < devthresh:
+        EIs[i] = 0
+      else:
+        ydiff = pr[0,i]-maxye
+        u = ydiff/ydev
+        EIs[i] = ydiff*stdnorm.cdf(u)+ydev*stdnorm.pdf(u)
+    return np.mean(EIs)
+    #return np.log(np.mean(EIs))
 
   # Pseudo-expected improvement func
   def __PEI(self,x):
   #   return -(np.log(EI(x))+np.log(RF(x)))
-    return EI(x)*RF(x)
+    x = np.expand_dims(x,axis=0)
+    #return -self.__EI(x)-self.__RF(x)
+    return -self.__EI(x)*self.__RF(x)
 
   # Inherit del_samples and extend to remove test-train datasets
   def del_samples(self,ndels=None,method='coarse_lhc',idx=None):
