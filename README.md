@@ -6,7 +6,7 @@ Predictive modelling and UQ suite. Use requires provision of function which take
 
 To install run the following in the same directory as setup.py (can drop the --user flag if root):  
 
-`pip install --user .`
+`pip3 install --user .`
 
 ## Functionality
 
@@ -14,15 +14,15 @@ To install run the following in the same directory as setup.py (can drop the --u
 
 Latin hypercube sampling  
 UQ forward propagation  
-Parallel target function execution
+Parallel target function execution  
 Gaussian process surrogates  
+GP adaptive sampling  
 
 ### In Development
 
-Adaptive sampling  
 Differential evolution MCMC  
 MCMC R convergence analysis  
-Advanced KDE posterior plotting  
+Bounded KDE posterior plotting  
 
 ### Future
 
