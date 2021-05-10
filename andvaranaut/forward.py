@@ -56,8 +56,6 @@ class lhc():
   # Then runs in parallel for each set of inputs
   # Returning 2D array of outputs
   def __parallel_runs(self,inps):
-    # Create parallel directory for tasks
-    os.system('mkdir parallel')
 
     # Run function in parallel in individual directories    
     if not ray.is_initialized():
@@ -93,6 +91,8 @@ class lhc():
   def __vector_solver(self,xsamps):
     t0 = stopwatch()
     n_samples = len(xsamps)
+    # Create directory for tasks
+    os.system('mkdir runs')
     # Parallel execution using ray
     if self.parallel:
       ysamps,fails = self.__parallel_runs(xsamps)
@@ -676,15 +676,33 @@ class gp(_surrogate):
     return super().y_dist(mode,nsamps,return_data,surrogate,self.predict)
 
   # Function which plots relative importances (inverse lengthscales)
-  def relative_importances(self,original_data=False,restarts=3):
+  def relative_importances(self,original_data=False,restarts=10,scale='std_dev'):
+    # Check scale arg
+    scales = ['mean','std_dev']
+    if scale not in scales:
+        raise Exception(f"Error: scale must be one of {scales}")
+    # Get means and std deviations for scaling
+    means = np.array([self.dists[i].mean() for i in range(self.nx)])
+    stds = np.array([self.dists[i].std() for i in range(self.nx)])
+    # Choose whether to train GP on original or converted data
     if original_data:
       m = self.__fit(self.x,self.y,restarts=restarts)
     else:
       m = self.m
+      means = np.array([self.xconrevs[i].con(means[i]) for i in range(self.nx)])
+      stds = np.array([np.std(self.xc[:,i]) for i in range(self.nx)])
+    # Select scale
+    if scale == 'mean':
+        facs = means
+    else:
+        facs = stds
+    # Evaluate importances
     sens_gp = np.zeros(self.nx)
     for i in range(self.nx):
       leng = m.kern.lengthscale[i]
-      sens_gp[i] = self.dists[i].mean()/leng
+      if facs[i] == 0:
+          facs[i] = 1
+      sens_gp[i] = facs[i]/leng
     plt.bar([f'x[{i}]'for i in range(self.nx)],np.log(sens_gp))
     plt.ylabel('Relative log importance')
     plt.show()
