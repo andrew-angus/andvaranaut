@@ -102,6 +102,9 @@ class lhc():
       ysamps = np.empty((0,self.ny))
       fails = np.empty(0,dtype=np.intc)
       for i in range(n_samples):
+        d = f'./runs/task{i}'
+        os.system(f'mkdir {d}')
+        os.chdir(d)
         # Keep track of fails but run rest of samples
         try:
           yout = self.target(xsamps[i,:])
@@ -111,12 +114,15 @@ class lhc():
               "\nCheck number of inputs and range of input values valid."
           print(errstr)
           fails = np.append(fails,i)
+          os.chdir('../..')
           continue
         # Number of function outputs check
         try:
           ysamps = np.vstack((ysamps,yout))
         except:
+          os.chdir('../..')
           raise Exception("Error: number of target function outputs is not equal to ny")
+        os.chdir('../..')
         print(f'Run is {(i+1)/n_samples:0.1%} complete.',end='\r')
     print()
     t1 = stopwatch()
@@ -232,7 +238,7 @@ class lhc():
 # Function which wraps serial function for executing in parallel directories
 @ray.remote(max_retries=0)
 def _parallel_wrap(fun,inp,idx):
-  d = f'./parallel/task{idx}'
+  d = f'./runs/task{idx}'
   os.system(f'mkdir {d}')
   os.chdir(d)
   res = fun(inp)
@@ -303,9 +309,9 @@ class _surrogate(lhc):
             'Error: Provided data conversion/reversion function not callable.')
       elif i is None:
         if j < self.nx:
-          xconrevs[j] = _none_conrev()
+          xconrevs[j] = _none_conrev(self.dists[j])
         else:
-          yconrevs[j-self.nx] = _none_conrev()
+          yconrevs[j-self.nx] = _none_conrev(None)
     self.xconrevs = xconrevs
     self.yconrevs = yconrevs
 
@@ -340,8 +346,8 @@ class _surrogate(lhc):
 
 # Class to replace None types in surrogate conrev arguments
 class _none_conrev:
-  def __init__(self):
-    pass
+  def __init__(self,dist):
+    self.prior = dist
   def con(self,x):
    return x 
   def rev(self,x):
