@@ -57,14 +57,20 @@ class gpmap:
     self.nx_exp = nx_exp # Number of experimental inputs
     self.nx_model = nx_model # Number of model inputs
     self.gp = gp
+    self.xopt = None
+    self.xcopt = None
+    self.yexp = None
+    self.ycexp = None
 
   def set_y(self,y):
     self.xext = np.r_[self.gp.x,np.zeros((len(y),self.gp.nx))]
     self.yext = np.r_[self.gp.y,y]
+    self.yexp = y
     for i in range(self.gp.nx):
       self.xext[:,i] = self.gp.xconrevs[i].con(self.xext[:,i])
     for i in range(self.gp.ny):
       self.yext[:,i] = self.gp.yconrevs[i].con(self.yext[:,i])
+    self.ycexp = self.yext[-len(y):]
 
   def log_prior(self,x):
     logps = np.zeros(self.gp.nx)
@@ -98,11 +104,13 @@ class gpmap:
     resx = np.zeros(self.gp.nx)
     for i in range(self.gp.nx):
       resx[i] = self.gp.xconrevs[i].rev(res.x[i])
+    self.xopt = resx
+    self.xcopt = res.x
 
     print(f'Optimal converted model parameters are: {res.x}')
     print(f'Reverted optimal model parameters are: {resx}')
     print(f'Posterior is: {-res.fun:0.3f}')
-    return resx
+
 
 # MCMC class inheriting from MAP
 class mcmc(MAP):
