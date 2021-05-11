@@ -1,6 +1,6 @@
 #!/bin/python3
 
-from andvaranaut.forward import gp as gp_class
+import andvaranaut.forward
 import numpy as np
 from scipy.optimize import differential_evolution,minimize
 import copy
@@ -48,8 +48,8 @@ class gpmap:
       raise Exception('Error: must specify an integer number of model input parameters => 0') 
     if (not isinstance(nx_model,int)) or (nx_model < 1):
       raise Exception('Error: must specify an integer number of model input parameters > 0') 
-    if (not isinstance(gp,gp_class)):
-      raise Exception("Error: must provide gp class instance from andvaranaut.forward module")
+    #if (not isinstance(gp,gp_class)):
+    #  raise Exception("Error: must provide gp class instance from andvaranaut.forward module")
     if (nx_exp+nx_model != gp.nx):
       raise Exception("Error: nx_exp and nx_model must sum to gp.nx")
 
