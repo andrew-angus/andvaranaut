@@ -116,31 +116,39 @@ class normal:
   def __init__(self,dist):
     self.con = partial(std_normal,dist=dist)
     self.rev = partial(normal_rev,dist=dist)
+    self.prior = st.norm()
 class uniform:
   def __init__(self,dist):
     self.con = partial(std_uniform,dist=dist)
     self.rev = partial(uniform_rev,dist=dist)
+    self.prior = st.uniform()
 class logit_logistic:
   def __init__(self,dist):
     self.con = partial(logit,dist=dist)
     self.rev = partial(logistic,dist=dist)
+    self.prior = st.logistic()
 class probit:
   def __init__(self,dist):
     self.con = partial(probit_con,dist=dist)
     self.rev = partial(probit_rev,dist=dist)
+    self.prior = st.norm()
 class cdf:
   def __init__(self,dist):
     self.con = partial(cdf_con,dist=dist)
     self.rev = partial(cdf_rev,dist=dist)
+    self.prior = st.uniform()
 class nonneg:
   def __init__(self):
     self.con = nonneg_con
     self.rev = nonneg_rev
+    self.prior = None
 class logarithm:
   def __init__(self):
     self.con = log_con
     self.rev = log_rev
+    self.prior = None
 class normalise:
   def __init__(self,fac):
     self.con = partial(normalise_con,fac=fac)
     self.rev = partial(normalise_rev,fac=fac)
+    self.prior = None
