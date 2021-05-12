@@ -387,7 +387,7 @@ class gp(_surrogate):
   # arXiv preprint arXiv:2005.01814 (2020).
   def __adaptive_sample(self,nsamps,batchsize,restarts):
     # Determine number of batches and new samples in each batch
-    batches = round(np.ceil(nsamps/batchsize))
+    batches = round(float(np.ceil(nsamps/batchsize)))
     for i in range(batches):
       newsamps = np.minimum(nsamps-i*batchsize,batchsize)
 
@@ -434,7 +434,7 @@ class gp(_surrogate):
       # Fit auxillary GP to ESE_loo
       print('Fitting auxillary GP to ESE_loo data...')
       xconrevs = [cdf(self.dists[j]) for j in range(self.nx)]
-      yconrevs = [_none_conrev() for j in range(self.ny)]
+      yconrevs = [_none_conrev(None) for j in range(self.ny)]
       gpaux = gp(kernel='RBF',noise=False,nx=self.nx,ny=self.ny,\
                  xconrevs=xconrevs,yconrevs=yconrevs,\
                  parallel=self.parallel,\
