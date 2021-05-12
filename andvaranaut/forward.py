@@ -146,7 +146,7 @@ class lhc():
     self.__vector_solver(xsamps)
 
   # Produce latin hypercube samples from input distributions
-  def __latin_sample(self,nsamps,seed):
+  def __latin_sample(self,nsamps,seed=None):
     if seed is not None:
       points = latin_random(nsamps,self.nx,seed)
     else:
