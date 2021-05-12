@@ -442,6 +442,7 @@ class gp(_surrogate):
                  target=self.target)
       gpaux.set_data(self.x,eseloo)
       gpaux.m = gpaux._gp__fit(gpaux.xc,gpaux.yc,restarts=restarts,minl=True)
+      print(gpaux.m[''])
 
       # Create repulsive function dataset
       gpaux._gp__create_xRF()
@@ -449,15 +450,16 @@ class gp(_surrogate):
       # Get sample batch
       xsamps = np.zeros((newsamps,self.nx))
       bnds = tuple((0,1) for j in range(self.nx))
+      bnd = 0.999999999999999
       print('Getting batch of samples...')
       t0 = stopwatch()
       for j in range(newsamps):
         # Maximise PEI to get next sample then add to RF data
-        res = differential_evolution(gpaux._gp__PEI,bounds=bnds)
+        res = differential_evolution(gpaux._gp__negative_PEI,bounds=bnds)
         x1 = np.expand_dims(res.x,axis=0)
-        x2 = np.random.rand(1,self.nx)
+        x1 = np.where(x1==1.0,bnd,np.where(x1==0.0,1-bnd,x1))
         gpaux._xRF = np.r_[gpaux._xRF,x1]
-        xsamps[j] = res.x
+        xsamps[j] = x1[0]
         print(f'{(j+1)/newsamps:0.1%} complete.',end='\r')
       t1 = stopwatch()
       print(f'Time taken: {t1-t0:0.2f} s')
@@ -532,10 +534,13 @@ class gp(_surrogate):
 
   # Pseudo-expected improvement func
   def __PEI(self,x):
-  #   return -(np.log(EI(x))+np.log(RF(x)))
     x = np.expand_dims(x,axis=0)
-    #return -self.__EI(x)-self.__RF(x)
-    return -self.__EI(x)*self.__RF(x)
+    #return self.__EI(x)+self.__RF(x)
+    return self.__EI(x)*self.__RF(x)
+        
+  # Negative PEI for minimisation
+  def __negative_PEI(self,x):
+    return -self.__PEI(x)
 
   # Inherit del_samples and extend to remove test-train datasets
   def del_samples(self,ndels=None,method='coarse_lhc',idx=None):
