@@ -138,16 +138,19 @@ class lhc():
     self.y = np.r_[self.y,ysamps]
 
   # Add n samples to current via latin hypercube sampling
-  def sample(self,nsamps):
+  def sample(self,nsamps,seed=None):
     if not isinstance(nsamps,int) or (nsamps < 1):
       raise Exception("Error: nsamps argument must be an integer > 0")
     print(f'Evaluating {nsamps} latin hypercube samples...')
-    xsamps = self.__latin_sample(nsamps)
+    xsamps = self.__latin_sample(nsamps,seed)
     self.__vector_solver(xsamps)
 
   # Produce latin hypercube samples from input distributions
-  def __latin_sample(self,nsamps):
-    points = latin_random(nsamps,self.nx)
+  def __latin_sample(self,nsamps,seed):
+    if seed is not None:
+      points = latin_random(nsamps,self.nx,seed)
+    else:
+      points = latin_random(nsamps,self.nx)
     xsamps = np.zeros_like(points)
     for j in range(self.nx):
       xsamps[:,j] = self.dists[j].ppf(points[:,j])
@@ -255,8 +258,8 @@ class _surrogate(lhc):
     self.__conrev_check(xconrevs,yconrevs)
   
   # Update sampling method to include data conversion
-  def sample(self,nsamps):
-    super().sample(nsamps)
+  def sample(self,nsamps,seed=None):
+    super().sample(nsamps,seed)
     self.__con(nsamps)
 
   # Conversion of last n samples
@@ -368,12 +371,12 @@ class gp(_surrogate):
     self.ytest = None
 
   # Sample method inherits lhc sampling and adds adaptive sampling option
-  def sample(self,nsamps,method='lhc',batchsize=1,restarts=10):
+  def sample(self,nsamps,method='lhc',batchsize=1,restarts=10,seed=None):
     methods = ['lhc','adaptive']
     if method not in methods:
       raise Exception(f'Error: method must be one of {methods}')
     if method == 'lhc':
-      super().sample(nsamps)
+      super().sample(nsamps,seed)
     else:
       if self.x.shape[0] < 2:
         raise Exception("Error: require at least 2 LHC samples to perform adaptive sampling.")
