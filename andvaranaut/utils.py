@@ -194,7 +194,7 @@ class _core():
   # Method which takes function, and 2D array of inputs
   # Then runs in parallel for each set of inputs
   # Returning 2D array of outputs
-  def __parallel_runs(self,inps):
+  def __parallel_runs(self,inps,verbose):
 
     # Run function in parallel in individual directories    
     if not ray.is_initialized():
@@ -218,7 +218,8 @@ class _core():
       lnew = len(ids)
       if lnew != lold:
         lold = lnew
-        print(f'Run is {(l-lold)/l:0.1%} complete.',end='\r')
+        if verbose:
+          print(f'Run is {(l-lold)/l:0.1%} complete.',end='\r')
     #ray.shutdown()
     
     # Reshape outputs to 2D array
@@ -227,14 +228,14 @@ class _core():
     return outs, fails
 
   # Private method which takes array of x samples and evaluates y at each
-  def __vector_solver(self,xsamps):
+  def __vector_solver(self,xsamps,verbose=True):
     t0 = stopwatch()
     n_samples = len(xsamps)
     # Create directory for tasks
     os.system('mkdir runs')
     # Parallel execution using ray
     if self.parallel:
-      ysamps,fails = self.__parallel_runs(xsamps)
+      ysamps,fails = self.__parallel_runs(xsamps,verbose)
       assert ysamps.shape[1] == self.ny, "Specified ny does not match function output"
     # Serial execution
     else:
@@ -262,10 +263,12 @@ class _core():
           os.chdir('../..')
           raise Exception("Error: number of target function outputs is not equal to ny")
         os.chdir('../..')
-        print(f'Run is {(i+1)/n_samples:0.1%} complete.',end='\r')
-    print()
+        if verbose:
+          print(f'Run is {(i+1)/n_samples:0.1%} complete.',end='\r')
     t1 = stopwatch()
-    print(f'Time taken: {t1-t0:0.2f} s')
+    if verbose:
+      print()
+      print(f'Time taken: {t1-t0:0.2f} s')
 
     # Remove failed samples and return arrays
     mask = np.ones(n_samples, dtype=bool)
