@@ -7,135 +7,21 @@ import scipy.stats as st
 from time import time as stopwatch
 import seaborn as sns
 import matplotlib.pyplot as plt
-import ray
-import multiprocessing as mp
 import os
 import numpy as np
 import copy
 from sklearn.model_selection import train_test_split
 from functools import partial
-from scipy.optimize import minimize,differential_evolution,dual_annealing,shgo
-from andvaranaut.utils import cdf
+from scipy.optimize import minimize,differential_evolution
+from andvaranaut.utils import _core,cdf
+import ray
 
-# Latin hypercube sampler and propagator
-class lhc():
-  def __init__(self,nx,ny,dists,target,parallel=False,nproc=1):
-    # Check inputs
-    if (not isinstance(nx,int)) or (nx < 1):
-      raise Exception('Error: must specify an integer number of input dimensions > 0') 
-    if (not isinstance(ny,int)) or (ny < 1):
-      raise Exception('Error: must specify an integer number of output dimensions > 0') 
-    if (not isinstance(dists,list)) or (len(dists) != nx):
-      raise Exception(\
-          'Error: must provide list of scipy.stats univariate distributions of length nx') 
-    check = 'scipy.stats._distn_infrastructure'
-    flags = [not getattr(i,'__module__',None)==check for i in dists]
-    if any(flags):
-      raise Exception(\
-          'Error: must provide list of scipy.stats univariate distributions of length nx') 
-    if not callable(target):
-      raise Exception(\
-          'Error: must provide target function which produces output from specified inputs')
-    if not isinstance(parallel,bool):
-      raise Exception("Error: parallel must be type bool.")
-    if not isinstance(nproc,int) or (nproc < 1):
-      raise Exception("Error: nproc argument must be an integer > 0")
-    assert (nproc <= mp.cpu_count()),\
-        "Error: number of processors selected exceeds available."
-    # Initialise attributes
-    self.nx = nx # Input dimensions
-    self.ny = ny # Output dimensions
-    self.dists = dists # Input distributions (must be scipy)
-    self.x = np.empty((0,nx))
-    self.y = np.empty((0,ny))
-    self.target = target # Target function which takes X and returns Y
-    self.parallel = parallel # Whether to use parallelism wherever possible
-    self.nproc = nproc # Number of processors to use if using parallelism
-
-  # Method which takes function, and 2D array of inputs
-  # Then runs in parallel for each set of inputs
-  # Returning 2D array of outputs
-  def __parallel_runs(self,inps):
-
-    # Run function in parallel in individual directories    
-    if not ray.is_initialized():
-      ray.init(num_cpus=self.nproc,log_to_driver=False)
-    l = len(inps)
-    all_ids = [_parallel_wrap.remote(self.target,inps[i],i) for i in range(l)]
-
-    # Get ids as they complete or fail, give warning on fail
-    outs = []; fails = np.empty(0,dtype=np.intc)
-    ids = copy.deepcopy(all_ids)
-    lold = l
-    while lold:
-      done_id,ids = ray.wait(ids)
-      try:
-        outs += ray.get(done_id)
-      except:
-        idx = all_ids.index(done_id[0]) 
-        fails = np.append(fails,idx)
-        print(f"Warning: parallel run {idx+1} failed with samples {inps[idx]}.",\
-          "\nCheck number of inputs/outputs and whether input ranges are valid.")
-      lnew = len(ids)
-      if lnew != lold:
-        lold = lnew
-        print(f'Run is {(l-lold)/l:0.1%} complete.',end='\r')
-    #ray.shutdown()
-    
-    # Reshape outputs to 2D array
-    outs = np.array(outs).reshape((len(outs),self.ny))
-
-    return outs, fails
-
-  # Private method which takes array of x samples and evaluates y at each
-  def __vector_solver(self,xsamps):
-    t0 = stopwatch()
-    n_samples = len(xsamps)
-    # Create directory for tasks
-    os.system('mkdir runs')
-    # Parallel execution using ray
-    if self.parallel:
-      ysamps,fails = self.__parallel_runs(xsamps)
-      assert ysamps.shape[1] == self.ny, "Specified ny does not match function output"
-    # Serial execution
-    else:
-      ysamps = np.empty((0,self.ny))
-      fails = np.empty(0,dtype=np.intc)
-      for i in range(n_samples):
-        d = f'./runs/task{i}'
-        os.system(f'mkdir {d}')
-        os.chdir(d)
-        # Keep track of fails but run rest of samples
-        try:
-          yout = self.target(xsamps[i,:])
-        except:
-          errstr = f"Warning: Target function evaluation failed at sample {i+1} "+\
-              "with xsamples: " +str(xsamps[i,:])+\
-              "\nCheck number of inputs and range of input values valid."
-          print(errstr)
-          fails = np.append(fails,i)
-          os.chdir('../..')
-          continue
-        # Number of function outputs check
-        try:
-          ysamps = np.vstack((ysamps,yout))
-        except:
-          os.chdir('../..')
-          raise Exception("Error: number of target function outputs is not equal to ny")
-        os.chdir('../..')
-        print(f'Run is {(i+1)/n_samples:0.1%} complete.',end='\r')
-    print()
-    t1 = stopwatch()
-    print(f'Time taken: {t1-t0:0.2f} s')
-
-    # Remove failed samples
-    mask = np.ones(n_samples, dtype=bool)
-    mask[fails] = False
-    xsamps = xsamps[mask]
-
-    # Add new evaluations to original data arrays
-    self.x = np.r_[self.x,xsamps]
-    self.y = np.r_[self.y,ysamps]
+# Latin hypercube sampler and propagator, inherits core
+class LHC(_core):
+  def __init__(self,**kwargs):
+    super().__init__(**kwargs)
+    self.x = np.empty((0,self.nx))
+    self.y = np.empty((0,self.ny))
 
   # Add n samples to current via latin hypercube sampling
   def sample(self,nsamps,seed=None):
@@ -143,7 +29,11 @@ class lhc():
       raise Exception("Error: nsamps argument must be an integer > 0")
     print(f'Evaluating {nsamps} latin hypercube samples...')
     xsamps = self.__latin_sample(nsamps,seed)
-    self.__vector_solver(xsamps)
+    xsamps,ysamps = self._core__vector_solver(xsamps)
+
+    # Add new evaluations to original data arrays
+    self.x = np.r_[self.x,xsamps]
+    self.y = np.r_[self.y,ysamps]
 
   # Produce latin hypercube samples from input distributions
   def __latin_sample(self,nsamps,seed=None):
@@ -153,7 +43,7 @@ class lhc():
       points = latin_random(nsamps,self.nx)
     xsamps = np.zeros_like(points)
     for j in range(self.nx):
-      xsamps[:,j] = self.dists[j].ppf(points[:,j])
+      xsamps[:,j] = self.priors[j].ppf(points[:,j])
     return xsamps
 
   # Delete n samples by selected method
@@ -231,25 +121,15 @@ class lhc():
           "Error: Setting data requires a 2d numpy array of float64 outputs")
     # Also check if x data within input distribution interval
     for i in range(self.nx):
-      intv = self.dists[i].interval(1.0)
+      intv = self.priors[i].interval(1.0)
       if not all(x[:,i] >= intv[0]) or not all(x[:,i] <= intv[1]):
         raise Exception(\
             "Error: provided x data must fit within provided input distribution ranges.")
     self.x = x
     self.y = y
 
-# Function which wraps serial function for executing in parallel directories
-@ray.remote(max_retries=0)
-def _parallel_wrap(fun,inp,idx):
-  d = f'./runs/task{idx}'
-  os.system(f'mkdir {d}')
-  os.chdir(d)
-  res = fun(inp)
-  os.chdir('../..')
-  return res
- 
 # Inherit from LHC class and add data conversion methods
-class _surrogate(lhc):
+class _surrogate(LHC):
   def __init__(self,xconrevs=None,yconrevs=None,**kwargs,):
     # Call LHC init, then validate and set now data conversion/reversion attributes
     super().__init__(**kwargs)
@@ -273,7 +153,7 @@ class _surrogate(lhc):
 
   # Inherit from lhc __del_samples and add converted dataset deletion
   def del_samples(self,ndels=None,method='coarse_lhc',idx=None):
-    returned = super()._lhc__del_samples(ndels,method,idx,returns=True)
+    returned = super()._LHC__del_samples(ndels,method,idx,returns=True)
     if method == 'coarse_lhc':
       for i in range(ndels):
         self.xc = np.delete(self.xc,returned[i],axis=0)
@@ -312,7 +192,7 @@ class _surrogate(lhc):
             'Error: Provided data conversion/reversion function not callable.')
       elif i is None:
         if j < self.nx:
-          xconrevs[j] = _none_conrev(self.dists[j])
+          xconrevs[j] = _none_conrev(self.priors[j])
         else:
           yconrevs[j-self.nx] = _none_conrev(None)
     self.xconrevs = xconrevs
@@ -329,7 +209,7 @@ class _surrogate(lhc):
   def y_dist(self,mode='hist_kde',nsamps=None,return_data=False,surrogate=True,predictfun=None):
     # Allow for use of surrogate evaluations or underlying datasets
     if surrogate:
-      xsamps = super()._lhc__latin_sample(nsamps)
+      xsamps = super()._LHC__latin_sample(nsamps)
       xcons = np.zeros((nsamps,self.nx))
       for i in range(self.nx):
         xcons[:,i] = self.xconrevs[i].con(xsamps[:,i])
@@ -339,7 +219,7 @@ class _surrogate(lhc):
         yrevs[:,i] = self.yconrevs[i].rev(ypreds[:,i])
       amax = np.argmax(ypreds)
       idx = (amax//self.ny,amax%self.ny)
-      super()._lhc__y_dist(yrevs,mode)
+      super()._LHC__y_dist(yrevs,mode)
       if return_data:
         return xsamps,yrevs
     elif not surrogate:
@@ -357,7 +237,7 @@ class _none_conrev:
    return x 
 
 # Inherit from surrogate class and add GP specific methods
-class gp(_surrogate):
+class GP(_surrogate):
   def __init__(self,kernel='RBF',noise=True,**kwargs):
     super().__init__(**kwargs)
     self.change_model(kernel,noise)
@@ -433,33 +313,32 @@ class gp(_surrogate):
       
       # Fit auxillary GP to ESE_loo
       print('Fitting auxillary GP to ESE_loo data...')
-      xconrevs = [cdf(self.dists[j]) for j in range(self.nx)]
+      xconrevs = [cdf(self.priors[j]) for j in range(self.nx)]
       yconrevs = [_none_conrev(None) for j in range(self.ny)]
-      gpaux = gp(kernel='RBF',noise=False,nx=self.nx,ny=self.ny,\
+      gpaux = GP(kernel='RBF',noise=False,nx=self.nx,ny=self.ny,\
                  xconrevs=xconrevs,yconrevs=yconrevs,\
                  parallel=self.parallel,\
-                 nproc=self.nproc,dists=self.dists,\
+                 nproc=self.nproc,priors=self.priors,\
                  target=self.target)
       gpaux.set_data(self.x,eseloo)
-      gpaux.m = gpaux._gp__fit(gpaux.xc,gpaux.yc,restarts=restarts,minl=True)
-      print(gpaux.m[''])
+      gpaux.m = gpaux._GP__fit(gpaux.xc,gpaux.yc,restarts=restarts,minl=True)
 
       # Create repulsive function dataset
-      gpaux._gp__create_xRF()
+      #gpaux._gp__create_xRF()
+      gpaux._xRF = copy.deepcopy(gpaux.xc)
 
       # Get sample batch
       xsamps = np.zeros((newsamps,self.nx))
-      bnds = tuple((0,1) for j in range(self.nx))
       bnd = 0.999999999999999
+      bnds = tuple((1-bnd,bnd) for j in range(self.nx))
       print('Getting batch of samples...')
       t0 = stopwatch()
       for j in range(newsamps):
         # Maximise PEI to get next sample then add to RF data
-        res = differential_evolution(gpaux._gp__negative_PEI,bounds=bnds)
+        res = differential_evolution(gpaux._GP__negative_PEI,bounds=bnds)
         x1 = np.expand_dims(res.x,axis=0)
-        x1 = np.where(x1==1.0,bnd,np.where(x1==0.0,1-bnd,x1))
         gpaux._xRF = np.r_[gpaux._xRF,x1]
-        xsamps[j] = x1[0]
+        xsamps[j] = res.x
         print(f'{(j+1)/newsamps:0.1%} complete.',end='\r')
       t1 = stopwatch()
       print(f'Time taken: {t1-t0:0.2f} s')
@@ -471,7 +350,9 @@ class gp(_surrogate):
       print("Evaluating function at sample points")
       for j in range(self.nx):
         xsamps[:,j] = gpaux.xconrevs[j].rev(xsamps[:,j])
-      self._lhc__vector_solver(xsamps)
+      xsamps,ysamps = self._core__vector_solver(xsamps)
+      self.x = np.r_[self.x,xsamps]
+      self.y = np.r_[self.y,ysamps]
       self._surrogate__con(newsamps)
 
   # Function for finding r which gives Kroot
@@ -481,13 +362,14 @@ class gp(_surrogate):
     return minimize(min_fun,1.0,args=Kroot,tol=Kroot/100).x[0]
 
   # Create repulsive function dataset
+  ## REDUNDANT
   def __create_xRF(self):
     # Existing dataset
     self._xRF = copy.deepcopy(self.xc)
     # Add corners of input space
-    xmaxs = np.array([self.xconrevs[i].con(self.dists[i].ppf(1))\
+    xmaxs = np.array([self.xconrevs[i].con(self.priors[i].ppf(1))\
         for i in range(self.nx)])
-    xmins = np.array([self.xconrevs[i].con(self.dists[i].isf(1))\
+    xmins = np.array([self.xconrevs[i].con(self.priors[i].isf(1))\
         for i in range(self.nx)])
     xmaxmins = ([xmaxs[i],xmins[i]] for i in range(self.nx))
     xgrid = np.meshgrid(*xmaxmins)
@@ -696,8 +578,8 @@ class gp(_surrogate):
     if scale not in scales:
         raise Exception(f"Error: scale must be one of {scales}")
     # Get means and std deviations for scaling
-    means = np.array([self.dists[i].mean() for i in range(self.nx)])
-    stds = np.array([self.dists[i].std() for i in range(self.nx)])
+    means = np.array([self.priors[i].mean() for i in range(self.nx)])
+    stds = np.array([self.priors[i].std() for i in range(self.nx)])
     # Choose whether to train GP on original or converted data
     if original_data:
       m = self.__fit(self.x,self.y,restarts=restarts)

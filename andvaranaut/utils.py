@@ -5,6 +5,11 @@ from scipy.special import logit as lg
 import numpy as np
 from functools import partial
 import scipy.stats as st
+import ray
+import multiprocessing as mp
+from time import time as stopwatch
+import os
+import copy
 
 # Save and load with pickle
 # ToDo: Faster with cpickle 
@@ -152,3 +157,129 @@ class normalise:
     self.con = partial(normalise_con,fac=fac)
     self.rev = partial(normalise_rev,fac=fac)
     self.prior = None
+
+# Core class which runs target function
+class _core():
+  def __init__(self,nx,ny,priors,target,parallel=False,nproc=1):
+    # Check inputs
+    if (not isinstance(nx,int)) or (nx < 1):
+      raise Exception('Error: must specify an integer number of input dimensions > 0') 
+    if (not isinstance(ny,int)) or (ny < 1):
+      raise Exception('Error: must specify an integer number of output dimensions > 0') 
+    if (not isinstance(priors,list)) or (len(priors) != nx):
+      raise Exception(\
+          'Error: must provide list of scipy.stats univariate distributions of length nx') 
+    check = 'scipy.stats._distn_infrastructure'
+    flags = [not getattr(i,'__module__',None)==check for i in priors]
+    if any(flags):
+      raise Exception(\
+          'Error: must provide list of scipy.stats univariate distributions of length nx') 
+    if not callable(target):
+      raise Exception(\
+          'Error: must provide target function which produces output from specified inputs')
+    if not isinstance(parallel,bool):
+      raise Exception("Error: parallel must be type bool.")
+    if not isinstance(nproc,int) or (nproc < 1):
+      raise Exception("Error: nproc argument must be an integer > 0")
+    assert (nproc <= mp.cpu_count()),\
+        "Error: number of processors selected exceeds available."
+    # Initialise attributes
+    self.nx = nx # Input dimensions
+    self.ny = ny # Output dimensions
+    self.priors = priors # Input distributions (must be scipy)
+    self.target = target # Target function which takes X and returns Y
+    self.parallel = parallel # Whether to use parallelism wherever possible
+    self.nproc = nproc # Number of processors to use if using parallelism
+
+  # Method which takes function, and 2D array of inputs
+  # Then runs in parallel for each set of inputs
+  # Returning 2D array of outputs
+  def __parallel_runs(self,inps):
+
+    # Run function in parallel in individual directories    
+    if not ray.is_initialized():
+      ray.init(num_cpus=self.nproc,log_to_driver=False)
+    l = len(inps)
+    all_ids = [_parallel_wrap.remote(self.target,inps[i],i) for i in range(l)]
+
+    # Get ids as they complete or fail, give warning on fail
+    outs = []; fails = np.empty(0,dtype=np.intc)
+    ids = copy.deepcopy(all_ids)
+    lold = l
+    while lold:
+      done_id,ids = ray.wait(ids)
+      try:
+        outs += ray.get(done_id)
+      except:
+        idx = all_ids.index(done_id[0]) 
+        fails = np.append(fails,idx)
+        print(f"Warning: parallel run {idx+1} failed with x values {inps[idx]}.",\
+          "\nCheck number of inputs/outputs and whether input ranges are valid.")
+      lnew = len(ids)
+      if lnew != lold:
+        lold = lnew
+        print(f'Run is {(l-lold)/l:0.1%} complete.',end='\r')
+    #ray.shutdown()
+    
+    # Reshape outputs to 2D array
+    outs = np.array(outs).reshape((len(outs),self.ny))
+
+    return outs, fails
+
+  # Private method which takes array of x samples and evaluates y at each
+  def __vector_solver(self,xsamps):
+    t0 = stopwatch()
+    n_samples = len(xsamps)
+    # Create directory for tasks
+    os.system('mkdir runs')
+    # Parallel execution using ray
+    if self.parallel:
+      ysamps,fails = self.__parallel_runs(xsamps)
+      assert ysamps.shape[1] == self.ny, "Specified ny does not match function output"
+    # Serial execution
+    else:
+      ysamps = np.empty((0,self.ny))
+      fails = np.empty(0,dtype=np.intc)
+      for i in range(n_samples):
+        d = f'./runs/task{i}'
+        os.system(f'mkdir {d}')
+        os.chdir(d)
+        # Keep track of fails but run rest of samples
+        try:
+          yout = self.target(xsamps[i,:])
+        except:
+          errstr = f"Warning: Target function evaluation failed at sample {i+1} "+\
+              "with x values: " +str(xsamps[i,:])+\
+              "\nCheck number of inputs and range of input values valid."
+          print(errstr)
+          fails = np.append(fails,i)
+          os.chdir('../..')
+          continue
+        # Number of function outputs check
+        try:
+          ysamps = np.vstack((ysamps,yout))
+        except:
+          os.chdir('../..')
+          raise Exception("Error: number of target function outputs is not equal to ny")
+        os.chdir('../..')
+        print(f'Run is {(i+1)/n_samples:0.1%} complete.',end='\r')
+    print()
+    t1 = stopwatch()
+    print(f'Time taken: {t1-t0:0.2f} s')
+
+    # Remove failed samples and return arrays
+    mask = np.ones(n_samples, dtype=bool)
+    mask[fails] = False
+    xsamps = xsamps[mask]
+    return xsamps, ysamps
+
+# Function which wraps serial function for executing in parallel directories
+@ray.remote(max_retries=0)
+def _parallel_wrap(fun,inp,idx):
+  d = f'./runs/task{idx}'
+  os.system(f'mkdir {d}')
+  os.chdir(d)
+  res = fun(inp)
+  os.chdir('../..')
+  return res
+ 
