@@ -112,11 +112,13 @@ class LHC(_core):
 
   # Optionally set x and y attributes with existing datasets
   def set_data(self,x,y):
-    # Checks that args are 2D numpy float arrays
-    if not isinstance(x,np.ndarray) or len(x.shape) != 2 or x.dtype != 'float64':
+    # Checks that args are 2D numpy float arrays of correct nx/ny
+    if not isinstance(x,np.ndarray) or len(x.shape) != 2 \
+        or x.dtype != 'float64' or x.shape[1] != self.nx:
       raise Exception(\
           "Error: Setting data requires a 2d numpy array of float64 inputs")
-    if not isinstance(y,np.ndarray) or len(y.shape) != 2 or y.dtype != 'float64':
+    if not isinstance(y,np.ndarray) or len(y.shape) != 2 \
+        or y.dtype != 'float64' or y.shape[1] != self.ny:
       raise Exception(\
           "Error: Setting data requires a 2d numpy array of float64 outputs")
     # Also check if x data within input distribution interval
