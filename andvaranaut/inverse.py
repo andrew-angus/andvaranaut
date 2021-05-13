@@ -1,44 +1,104 @@
 #!/bin/python3
 
-from andvaranaut.forward import gp as gp_class
+from andvaranaut.utils import _core
+from andvaranaut.forward import GP
 import numpy as np
 from scipy.optimize import differential_evolution
+import scipy.stats as st
 import copy
 
 # Maximum a posteriori class
-class MAP:
-  def __init__(self,nx,ny,dists,target,parallel=False,nproc=1):
+class MAP(_core):
+  def __init__(self,nx_exp,nx_model,**kwargs):
     # Check inputs
-    if (not isinstance(nx,int)) or (nx < 1):
+    if (not isinstance(nx_exp,int)) or (nx_exp < 0):
+      raise Exception(\
+          'Error: must specify an integer number of experimental input parameters => 0') 
+    if (not isinstance(nx_model,int)) or (nx_model < 1):
       raise Exception('Error: must specify an integer number of model input parameters > 0') 
-    if (not isinstance(ny,int)) or (ny < 1):
-      raise Exception('Error: must specify an integer number of output dimensions > 0') 
-    if (not isinstance(priors,list)) or (len(priors) != nx):
+    # Allow for only specifying priors for model parameters
+    if (isinstance(kwargs['priors'],list)) and (len(kwargs['priors']) == nx_model):
+      for i in range(nx_exp):
+        kwargs['priors'].insert(0,st.norm())
+    super().__init__(nx=nx_exp+nx_model,**kwargs)
+    # Initialise new attributes
+    self.nx_exp = nx_exp # Observable input dimensions
+    self.nx_model = nx_model # Model input dimensions
+    self.x_obv = None
+    self.y_obv = None
+    self.y_noise = None
+    self.obvs = None
+    self.x_opt = None
+
+  # Set your experimental x and y with noise
+  def set_observations(self,y,y_noise=None,x_exp=None):
+    # Check y input
+    if not isinstance(y,np.ndarray) or len(y.shape) != 2 \
+        or y.dtype != 'float64' or y.shape[1] != self.ny:
       raise Exception(\
-          'Error: must provide list of scipy.stats univariate distributions of length nx') 
-    check = 'scipy.stats._distn_infrastructure'
-    flags = [not getattr(i,'__module__',None)==check for i in dists]
-    if any(flags):
-      raise Exception(\
-          'Error: must provide list of scipy.stats univariate distributions of length nx') 
-    if not callable(target):
-      raise Exception(\
-          'Error: must provide target function which produces output from specified inputs')
-    if not isinstance(parallel,bool):
-      raise Exception("Error: parallel must be type bool.")
-    if not isinstance(nproc,int) or (nproc < 1):
-      raise Exception("Error: nproc argument must be an integer > 0")
-    assert (nproc <= mp.cpu_count()),\
-        "Error: number of processors selected exceeds available."
-    # Initialise attributes
-    self.nx = nx # Input dimensions
-    self.ny = ny # Output dimensions
-    self.dists = dists # Input distributions (must be scipy)
-    self.x = np.empty((0,nx))
-    self.y = np.empty((0,ny))
-    self.target = target # Target function which takes X and returns Y
-    self.parallel = parallel # Whether to use parallelism wherever possible
-    self.nproc = nproc # Number of processors to use if using parallelism
+          "Error: Setting data requires a 2d numpy array of float64 outputs")
+    # Check/modify other inputs
+    self.obvs = len(y)
+    if y_noise is None:
+      y_noise = np.ones((self.obvs,self.ny))*np.finfo(np.float64).eps
+    else:
+      if not isinstance(y_noise,np.ndarray) or len(y_noise.shape) != 2 \
+          or y_noise.dtype != 'float64' or y_noise.shape[1] != self.ny:
+        raise Exception(\
+            "Error: Setting data requires a 2d numpy array of float64 noises"+\
+            " of the same shape as y")
+    if x_exp is None:
+      if self.nx_exp != 0:
+        raise Exception("Error: must provide x_exp values for each observation")
+    else:
+      if not isinstance(x_exp,np.ndarray) or len(x_exp.shape) != 2 \
+          or x_exp.dtype != 'float64' or x_exp.shape[1] != self.nx_exp:
+        raise Exception(\
+            "Error: Setting data requires a 2d numpy array of float64 exp inputs"+\
+            " of shape (len(y),nx_exp)")
+    # Set obvs
+    self.x_obv = np.zeros((self.obvs,self.nx))
+    self.x_obv[:,:self.nx_exp] = x_exp
+    self.y_obv = y
+    self.y_noise = y_noise
+
+  # Log prior method acting on specified model inputs
+  def log_prior(self,x):
+    logps = np.zeros(self.nx_model)
+    for i in range(self.nx_model):
+      logps[i] = self.priors[i+self.nx_exp].logpdf(x[i])
+    return np.sum(logps)
+
+  # Gaussian log likelihood method acting on specified model inputs
+  def log_likelihood(self,x):
+    self.x_obv[:,self.nx_exp:] = x
+    xsamps,fvals = self._core__vector_solver(self.x_obv,verbose=False)
+    if len(xsamps) != self.obvs:
+      raise Exception("Error: one or more function evaluations failed to return valid result.")
+    res = -self.obvs*self.ny*0.5*np.log(2*np.pi)
+    res -= np.sum(np.log(self.y_noise))
+    res -= np.sum(0.5/np.power(self.y_noise,2)*np.power(fvals-self.y_obv,2))
+    return res
+
+  # Log posterior method acting on specified model inputs
+  def log_posterior(self,x):
+    return self.log_likelihood(x) + self.log_prior(x)
+
+  # Negative version of log posterior for minimizing using standard libraries
+  def __negative_log_posterior(self,x):
+    return -self.log_posterior(x)
+    
+  def opt(self):
+    # Bounds which try and avoid extrapolation
+    bnd = 0.999999999999999
+    bnds = tuple(self.priors[i+self.nx_exp].interval(bnd) for i in range(self.nx_model))
+    print("Finding optimal inputs by maximising posterior. Bounds on x are:")
+    print(bnds)
+    res = differential_evolution(self.__negative_log_posterior,bounds=bnds)
+    self.xopt = res.x
+
+    print(f'Optimal converted model parameters are: {res.x}')
+    print(f'Posterior is: {-res.fun:0.3f}')
 
 # Quick and dirty maximum a posteriori class using a GP
 class gpmap:
@@ -48,7 +108,7 @@ class gpmap:
       raise Exception('Error: must specify an integer number of model input parameters => 0') 
     if (not isinstance(nx_model,int)) or (nx_model < 1):
       raise Exception('Error: must specify an integer number of model input parameters > 0') 
-    if (not isinstance(gp,gp_class)):
+    if (not isinstance(gp,GP)):
       raise Exception("Error: must provide gp class instance from andvaranaut.forward module")
     if (nx_exp+nx_model != gp.nx):
       raise Exception("Error: nx_exp and nx_model must sum to gp.nx")
