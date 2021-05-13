@@ -100,6 +100,74 @@ class MAP(_core):
     print(f'Optimal converted model parameters are: {res.x}')
     print(f'Posterior is: {-res.fun:0.3f}')
 
+# MAP class using a GP
+class GPMAP(MAP):
+  def __init__(self,gp,**kwargs):
+    super().__init__(**kwargs)
+    # Check inputs
+    if (not isinstance(gp,GP)):
+      raise Exception("Error: must provide gp class instance from andvaranaut.forward module")
+    if (nx_exp+nx_model != gp.nx):
+      raise Exception("Error: nx_exp and nx_model must sum to gp.nx")
+
+    # Initialise attributes
+    self.gp = gp
+    self.yc_obv = None
+    self.xc_obv = None
+    self.yc_noise = None
+    self.xcopt = None
+
+  def set_observations(self,y,y_noise=None,x_exp=None):
+    super().set_observations(y,y_noise,x_exp)
+    self.yc_obv = copy.deepcopy(self.y_obv)
+    self.xc_obv = copy.deepcopy(self.x_obv)
+    self.yc_noise = copy.deepcopy(self.y_noise)
+    for i in range(self.nx_exp):
+      self.xc_obv[:,i] = self.gp.xconrevs[i].con(self.x_obv[:,i])
+    for i in range(self.ny):
+      self.yc_obv[:,i] = self.gp.yconrevs[i].con(self.y_obv[:,i])
+    for i in range(self.ny):
+      self.yc_noise[:,i] = self.gp.yconrevs[i].con(self.y_noise[:,i])
+
+  def log_prior(self,x):
+    logps = np.zeros(self.gp.nx)
+    for i in range(self.gp.nx):
+      logps[i] = self.gp.xconrevs[i].prior.logpdf(x[i])
+    return np.sum(logps)
+
+  def log_likelihood(self,x):
+    gp2 = copy.deepcopy(self.gp)
+    gp2.xc = self.xext
+    gp2.xc[-1] = x
+    gp2.yc = self.yext
+    gp2.m = gp2._gp__fit(gp2.xc,gp2.yc,opt=False)
+    gp2.m.kern.lengthscale = self.gp.m.kern.lengthscale
+    gp2.m.kern.variance = self.gp.m.kern.variance
+    gp2.m.Gaussian_noise.variance = self.gp.m.Gaussian_noise.variance
+    return gp2.m.log_likelihood()
+
+  def log_posterior(self,x):
+    return self.log_likelihood(x) + self.log_prior(x)
+
+  def __negative_log_posterior(self,x):
+    return -self.log_posterior(x)
+    
+  def MAP(self):
+    # Bounds which try and avoid extrapolation
+    bnds = tuple((np.min(self.gp.xc[:,j]),np.max(self.gp.xc[:,j])) for j in range(self.gp.nx))
+    print("Finding optimal inputs by maximising posterior. Bounds on xc are:")
+    print(bnds)
+    res = differential_evolution(self.__negative_log_posterior,bounds=bnds)
+    resx = np.zeros(self.gp.nx)
+    for i in range(self.gp.nx):
+      resx[i] = self.gp.xconrevs[i].rev(res.x[i])
+    self.xopt = resx
+    self.xcopt = res.x
+
+    print(f'Optimal converted model parameters are: {res.x}')
+    print(f'Reverted optimal model parameters are: {resx}')
+    print(f'Posterior is: {-res.fun:0.3f}')
+
 # Quick and dirty maximum a posteriori class using a GP
 class gpmap:
   def __init__(self,nx_exp,nx_model,gp):
@@ -170,7 +238,6 @@ class gpmap:
     print(f'Optimal converted model parameters are: {res.x}')
     print(f'Reverted optimal model parameters are: {resx}')
     print(f'Posterior is: {-res.fun:0.3f}')
-
 
 # MCMC class inheriting from MAP
 class mcmc(MAP):
