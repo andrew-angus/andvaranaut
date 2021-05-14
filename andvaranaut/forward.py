@@ -194,9 +194,9 @@ class _surrogate(LHC):
             'Error: Provided data conversion/reversion function not callable.')
       elif i is None:
         if j < self.nx:
-          xconrevs[j] = _none_conrev(self.priors[j])
+          xconrevs[j] = _none_conrev()
         else:
-          yconrevs[j-self.nx] = _none_conrev(None)
+          yconrevs[j-self.nx] = _none_conrev()
     self.xconrevs = xconrevs
     self.yconrevs = yconrevs
 
@@ -231,8 +231,6 @@ class _surrogate(LHC):
 
 # Class to replace None types in surrogate conrev arguments
 class _none_conrev:
-  def __init__(self,dist):
-    self.prior = dist
   def con(self,x):
    return x 
   def rev(self,x):
@@ -316,7 +314,7 @@ class GP(_surrogate):
       # Fit auxillary GP to ESE_loo
       print('Fitting auxillary GP to ESE_loo data...')
       xconrevs = [cdf(self.priors[j]) for j in range(self.nx)]
-      yconrevs = [_none_conrev(None) for j in range(self.ny)]
+      yconrevs = [_none_conrev() for j in range(self.ny)]
       gpaux = GP(kernel='RBF',noise=False,nx=self.nx,ny=self.ny,\
                  xconrevs=xconrevs,yconrevs=yconrevs,\
                  parallel=self.parallel,\
