@@ -6,6 +6,8 @@ import numpy as np
 from scipy.optimize import differential_evolution
 import scipy.stats as st
 import copy
+import GPy
+from scipy.misc import derivative
 
 # Maximum a posteriori class
 class MAP(_core):
@@ -101,68 +103,109 @@ class MAP(_core):
     print(f'Posterior is: {-res.fun:0.3f}')
 
 # MAP class using a GP
-class GPMAP(MAP):
-  def __init__(self,gp,**kwargs):
-    super().__init__(**kwargs)
-    # Check inputs
-    if (not isinstance(gp,GP)):
-      raise Exception("Error: must provide gp class instance from andvaranaut.forward module")
-    if (nx_exp+nx_model != gp.nx):
-      raise Exception("Error: nx_exp and nx_model must sum to gp.nx")
+class GPMAP(MAP,GP):
+  def __init__(self,nx_exp,nx_model,\
+          kernel='RBF',noise=True,xconrevs=None,yconrevs=None,**kwargs):
+    # Init of two parent classes
+    super().__init__(nx_exp=nx_exp,nx_model=nx_model,**kwargs)
+    kwargs['nx'] = self.nx
+    GP.__init__(self,kernel=kernel,noise=noise,xconrevs=xconrevs,yconrevs=yconrevs,**kwargs)
 
-    # Initialise attributes
-    self.gp = gp
+    # Additional check on priors to make sure both nx_exp and nx_model represented
+    if len(self.priors) != len(kwargs['priors']):
+      raise Exception(\
+          'Error: must provide list of scipy.stats univariate priors of length nx') 
+
+    # Initialise new attributes
     self.yc_obv = None
     self.xc_obv = None
     self.yc_noise = None
     self.xcopt = None
 
+  # Allow for setting attributes with existing GP class from andvaranaut.forward
+  def set_GP(self,gp):
+    # Check inputs
+    if (not isinstance(gp,GP)):
+      raise Exception("Error: must provide gp class instance from andvaranaut.forward module")
+    if (self.nx != gp.nx):
+      raise Exception("Error: nx_exp and nx_model must sum to gp.nx")
+    if (self.ny != gp.ny):
+      raise Exception("Error: self.ny does not match gp.ny")
+    print("Warning: Setting GP overwrites GPMAP init arguments. Ensure priors etc. are correct.")
+    # Extract attributes
+    self.priors = gp.priors
+    self.target = gp.target
+    self.parallel = gp.parallel
+    self.nproc = gp.nproc
+    self.xtrain = gp.xtrain
+    self.xtest = gp.xtest
+    self.ytrain = gp.ytrain
+    self.ytest = gp.ytest
+    self.kernel = gp.kernel
+    self.noise = gp.noise
+    self.m = gp.m
+    self.x = gp.x
+    self.y = gp.y
+    self.xconrevs = gp.xconrevs
+    self.yconrevs = gp.yconrevs
+    self.xc = gp.xc
+    self.yc = gp.yc
+    # Reset observations to ensure correct conversions if already set
+    if self.y_obv is not None:
+      self.set_observations(self.y_obv,self.y_noise,self.x_obv[:,:self.nx_exp])
+
+  # Extend parent method to include data conversion/reversion
   def set_observations(self,y,y_noise=None,x_exp=None):
     super().set_observations(y,y_noise,x_exp)
     self.yc_obv = copy.deepcopy(self.y_obv)
     self.xc_obv = copy.deepcopy(self.x_obv)
     self.yc_noise = copy.deepcopy(self.y_noise)
     for i in range(self.nx_exp):
-      self.xc_obv[:,i] = self.gp.xconrevs[i].con(self.x_obv[:,i])
+      self.xc_obv[:,i] = self.xconrevs[i].con(self.x_obv[:,i])
     for i in range(self.ny):
-      self.yc_obv[:,i] = self.gp.yconrevs[i].con(self.y_obv[:,i])
+      self.yc_obv[:,i] = self.yconrevs[i].con(self.y_obv[:,i])
     for i in range(self.ny):
-      self.yc_noise[:,i] = self.gp.yconrevs[i].con(self.y_noise[:,i])
+      self.yc_noise[:,i] = self.yconrevs[i].con(self.y_noise[:,i])
 
+  # Extend log_prior method to work with converted priors
   def log_prior(self,x):
-    logps = np.zeros(self.gp.nx)
-    for i in range(self.gp.nx):
-      logps[i] = self.gp.xconrevs[i].prior.logpdf(x[i])
-    return np.sum(logps)
+    logpsum = 0
+    for i in range(self.nx_model):
+      logpsum += self.priors[self.nx_exp+i].logpdf(self.xconrevs[self.nx_exp+i].rev(x[i]))    
+      #xder = derivative(self.xconrevs[self.nx_exp+i].rev,x[i],dx=1e-6)
+      #logpsum += np.log(xder) + \
+      #    self.priors[self.nx_exp+i].logpdf(self.xconrevs[self.nx_exp+i].rev(x[i]))    
+      return logpsum
 
+  # Take log_likelihood from GP
+  ## ToDo: Add option to also optimise hyperparameters
   def log_likelihood(self,x):
-    gp2 = copy.deepcopy(self.gp)
-    gp2.xc = self.xext
-    gp2.xc[-1] = x
-    gp2.yc = self.yext
-    gp2.m = gp2._gp__fit(gp2.xc,gp2.yc,opt=False)
-    gp2.m.kern.lengthscale = self.gp.m.kern.lengthscale
-    gp2.m.kern.variance = self.gp.m.kern.variance
-    gp2.m.Gaussian_noise.variance = self.gp.m.Gaussian_noise.variance
-    return gp2.m.log_likelihood()
+    xc = np.r_[self.xc,self.x_obv]
+    yc = np.r_[self.yc,self.y_obv]
+    xc[-self.obvs:,self.nx_exp:] = x
+    kern = GPy.kern.Exponential(input_dim=nvars, ARD=True)
+    kstring = 'GPy.kern.'+self.kernel+'(input_dim=self.nx,variance=1.,lengthscale=1.,ARD=True)'
+    kern = eval(kstring)
+    m = GPy.models.GPHeteroscedasticRegression(xc,yc,kern)
+    m.kern.lengthscale = self.m.kern.lengthscale
+    m.kern.variance = self.m.kern.variance
+    m.Gaussian_noise.variance[:-self.obvs] = self.m.Gaussian_noise.variance
+    m.Gaussian_noise.variance[-self.obvs:] = self.yc_noise
+    return m.log_likelihood()
 
-  def log_posterior(self,x):
-    return self.log_likelihood(x) + self.log_prior(x)
-
-  def __negative_log_posterior(self,x):
-    return -self.log_posterior(x)
-    
-  def MAP(self):
+  # Change opt method to use GP data bounds and reversion of optimised x values
+  def opt(self):
     # Bounds which try and avoid extrapolation
-    bnds = tuple((np.min(self.gp.xc[:,j]),np.max(self.gp.xc[:,j])) for j in range(self.gp.nx))
-    print("Finding optimal inputs by maximising posterior. Bounds on xc are:")
+    bnds = tuple((np.min(self.xc[:,j]),np.max(self.xc[:,j])) \
+        for j in range(self.nx_exp,self.nx))
+    print("Finding optimal model inputs by maximising posterior. Bounds on x are:")
     print(bnds)
-    res = differential_evolution(self.__negative_log_posterior,bounds=bnds)
-    resx = np.zeros(self.gp.nx)
-    for i in range(self.gp.nx):
-      resx[i] = self.gp.xconrevs[i].rev(res.x[i])
-    self.xopt = resx
-    self.xcopt = res.x
+    res = differential_evolution(self._MAP__negative_log_posterior,bounds=bnds)
+    resx = np.zeros(self.nx_model)
+    for i in range(self.nx_model):
+      resx[i] = self.xconrevs[i+self.nx_exp].rev(res.x[i])
+    self.x_opt = resx
+    self.xc_opt = res.x
 
     print(f'Optimal converted model parameters are: {res.x}')
     print(f'Reverted optimal model parameters are: {resx}')
