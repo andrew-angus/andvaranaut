@@ -167,14 +167,16 @@ class GPMAP(MAP,GP):
     for i in range(self.ny):
       self.yc_noise[:,i] = self.yconrevs[i].con(self.y_noise[:,i])
 
+  # Private method which calculates Jacobian of x transform
+  def __xder(self,x,i):
+    return derivative(self.xconrevs[self.nx_exp+i].rev,x[i],dx=1e-6)
+
   # Extend log_prior method to work with converted priors
   def log_prior(self,x):
     logpsum = 0
     for i in range(self.nx_model):
-      logpsum += self.priors[self.nx_exp+i].logpdf(self.xconrevs[self.nx_exp+i].rev(x[i]))    
-      #xder = derivative(self.xconrevs[self.nx_exp+i].rev,x[i],dx=1e-6)
-      #logpsum += np.log(xder) + \
-      #    self.priors[self.nx_exp+i].logpdf(self.xconrevs[self.nx_exp+i].rev(x[i]))    
+      logpsum += np.log(self.__xder(x,i)) + \
+          self.priors[self.nx_exp+i].logpdf(self.xconrevs[self.nx_exp+i].rev(x[i]))    
       return logpsum
 
   # Take log_likelihood from GP
@@ -193,17 +195,24 @@ class GPMAP(MAP,GP):
     m.Gaussian_noise.variance[-self.obvs:] = self.yc_noise
     return m.log_likelihood()
 
+  # Method specific to this class which reverts posterior to original x coords for opt
+  def __negative_rev_log_posterior(self,x):
+    pc = self._MAP__negative_log_posterior(x)
+    for i in range(self.nx_model):
+      pc += np.log(self.__xder(x,i))
+    return pc
+
   # Change opt method to use GP data bounds and reversion of optimised x values
   def opt(self):
     # Bounds which try and avoid extrapolation
-    bnds = tuple((np.min(self.xc[:,j]),np.max(self.xc[:,j])) \
+    bnds = tuple((np.min(self.x[:,j]),np.max(self.x[:,j])) \
         for j in range(self.nx_exp,self.nx))
     print("Finding optimal model inputs by maximising posterior. Bounds on x are:")
     print(bnds)
-    res = differential_evolution(self._MAP__negative_log_posterior,bounds=bnds)
+    res = differential_evolution(self.__negative_rev_log_posterior,bounds=bnds)
     resx = np.zeros(self.nx_model)
     for i in range(self.nx_model):
-      resx[i] = self.xconrevs[i+self.nx_exp].rev(res.x[i])
+      resx[i] = self.xconrevs[i+self.nx_exp].con(res.x[i])
     self.x_opt = resx
     self.xc_opt = res.x
 
