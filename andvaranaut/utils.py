@@ -248,7 +248,9 @@ class _core():
           fails = np.append(fails,i)
           os.chdir('../..')
           continue
-        # Number of function outputs check
+
+
+        # Number of function outputs check and append samples
         try:
           ysamps = np.vstack((ysamps,yout))
         except:
@@ -258,14 +260,31 @@ class _core():
         if verbose:
           print(f'Run is {(i+1)/n_samples:0.1%} complete.',end='\r')
     t1 = stopwatch()
-    if verbose:
-      print()
-      print(f'Time taken: {t1-t0:0.2f} s')
 
-    # Remove failed samples and return arrays
+    # Remove failed samples
     mask = np.ones(n_samples, dtype=bool)
     mask[fails] = False
     xsamps = xsamps[mask]
+
+    # NaN and inf check
+    fails = np.empty(0,dtype=np.intc)
+    for i,j in enumerate(ysamps):
+      if np.any(np.isnan(j)) or np.any(np.abs(j) == np.inf):
+        fails = np.append(fails,i)
+        errstr = f"Warning: Target function evaluation returned inf/nan at sample "+\
+            "with x values: " +str(xsamps[i,:])+"\nCheck range of input values valid."
+        print(errstr)
+    mask = np.ones(len(xsamps),dtype=bool)
+    mask[fails] = False
+    xsamps = xsamps[mask]
+    ysamps = ysamps[mask]
+
+    # Final print on successful samples 
+    if verbose:
+      print()
+      print(f'Sampling complete with {len(xsamps)/n_samples:0.1%} success rate.')
+      print(f'Time taken: {t1-t0:0.2f} s')
+
     return xsamps, ysamps
 
 # Function which wraps serial function for executing in parallel directories
