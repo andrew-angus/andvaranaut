@@ -142,7 +142,7 @@ class _surrogate(LHC):
   # Update sampling method to include data conversion
   def sample(self,nsamps,seed=None):
     super().sample(nsamps,seed)
-    self.__con(nsamps)
+    self.__con(len(self.x))
 
   # Conversion of last n samples
   def __con(self,nsamps):
