@@ -38,7 +38,7 @@ class MAP(_core):
     if not isinstance(y,np.ndarray) or len(y.shape) != 2 \
         or y.dtype != 'float64' or y.shape[1] != self.ny:
       raise Exception(\
-          "Error: Setting data requires a 2d numpy array of float64 outputs")
+          "Error: Setting y data requires a 2d numpy array of float64 outputs")
     # Check/modify other inputs
     self.obvs = len(y)
     if y_noise is None:
@@ -47,7 +47,7 @@ class MAP(_core):
       if not isinstance(y_noise,np.ndarray) or len(y_noise.shape) != 2 \
           or y_noise.dtype != 'float64' or y_noise.shape[1] != self.ny:
         raise Exception(\
-            "Error: Setting data requires a 2d numpy array of float64 noises"+\
+            "Error: Setting y_noise requires a 2d numpy array of float64 variances"+\
             " of the same shape as y")
     if x_exp is None:
       if self.nx_exp != 0:
@@ -56,7 +56,7 @@ class MAP(_core):
       if not isinstance(x_exp,np.ndarray) or len(x_exp.shape) != 2 \
           or x_exp.dtype != 'float64' or x_exp.shape[1] != self.nx_exp:
         raise Exception(\
-            "Error: Setting data requires a 2d numpy array of float64 exp inputs"+\
+            "Error: Setting x_exp requires a 2d numpy array of float64 exp inputs"+\
             " of shape (len(y),nx_exp)")
     # Set obvs
     self.x_obv = np.zeros((self.obvs,self.nx))
@@ -164,39 +164,51 @@ class GPMAP(MAP,GP):
       self.xc_obv[:,i] = self.xconrevs[i].con(self.x_obv[:,i])
     for i in range(self.ny):
       self.yc_obv[:,i] = self.yconrevs[i].con(self.y_obv[:,i])
+    # Non-linear transformations will invalidate std_dev so take average of conversion deviation
     for i in range(self.ny):
-      self.yc_noise[:,i] = self.yconrevs[i].con(self.y_noise[:,i])
+      for j in range(len(self.yc_noise)):
+        self.yc_noise[j,i] = np.mean(np.array([self.yconrevs[i].con(\
+         np.sqrt(self.y_noise[j,i])+self.y_obv[j,i]),self.yconrevs[i].con(\
+          np.sqrt(self.y_noise[j,i])-self.y_obv[j,i])]))**2
+
+    # Also flatten second noise dimension via averaging\
+    # for compatibility with GPy heteroscedastic regression
+    for i in range(len(self.yc_noise)):
+      self.yc_noise[i,:] = np.mean(self.yc_noise[i,:])
+    self.yc_noise = self.yc_noise[:,0:1]
 
   # Private method which calculates Jacobian of x transform
   def __xder(self,x,i):
-    return derivative(self.xconrevs[self.nx_exp+i].rev,x[i],dx=1e-6)
+    return derivative(self.xconrevs[self.nx_exp+i].rev,\
+        self.xconrevs[self.nx_exp+i].con(x[i]),dx=1e-6)
 
   # Extend log_prior method to work with converted priors
   def log_prior(self,x):
     logpsum = 0
     for i in range(self.nx_model):
       logpsum += np.log(self.__xder(x,i)) + \
-          self.priors[self.nx_exp+i].logpdf(self.xconrevs[self.nx_exp+i].rev(x[i]))    
+         self.priors[self.nx_exp+i].logpdf(x[i])    
       return logpsum
 
   # Take log_likelihood from GP
   ## ToDo: Add option to also optimise hyperparameters
   def log_likelihood(self,x):
-    xc = np.r_[self.xc,self.x_obv]
-    yc = np.r_[self.yc,self.y_obv]
-    xc[-self.obvs:,self.nx_exp:] = x
-    kern = GPy.kern.Exponential(input_dim=nvars, ARD=True)
+    xc = np.r_[self.xc,self.xc_obv]
+    yc = np.r_[self.yc,self.yc_obv]
+    for i in range(self.nx_model):
+      xc[-self.obvs:,self.nx_exp+i] = self.xconrevs[self.nx_exp+i].con(x[i])
     kstring = 'GPy.kern.'+self.kernel+'(input_dim=self.nx,variance=1.,lengthscale=1.,ARD=True)'
     kern = eval(kstring)
     m = GPy.models.GPHeteroscedasticRegression(xc,yc,kern)
     m.kern.lengthscale = self.m.kern.lengthscale
     m.kern.variance = self.m.kern.variance
-    m.Gaussian_noise.variance[:-self.obvs] = self.m.Gaussian_noise.variance
-    m.Gaussian_noise.variance[-self.obvs:] = self.yc_noise
+    m.het_Gauss.variance[:-self.obvs] = self.m.Gaussian_noise.variance
+    m.het_Gauss.variance[-self.obvs:] = self.yc_noise
     return m.log_likelihood()
 
   # Method specific to this class which reverts posterior to original x coords for opt
   def __negative_rev_log_posterior(self,x):
+    x = np.array(x)
     pc = self._MAP__negative_log_posterior(x)
     for i in range(self.nx_model):
       pc += np.log(self.__xder(x,i))
@@ -205,7 +217,10 @@ class GPMAP(MAP,GP):
   # Change opt method to use GP data bounds and reversion of optimised x values
   def opt(self):
     # Bounds which try and avoid extrapolation
-    bnds = tuple((np.min(self.x[:,j]),np.max(self.x[:,j])) \
+    # Also avoid calculating conversion derivative at bounds
+    maxbnds = [i.interval(1-1e-3) for i in self.priors]
+    print(maxbnds)
+    bnds = tuple((np.maximum(np.min(self.x[:,j]),maxbnds[j][0]),np.minimum(np.max(self.x[:,j]),maxbnds[j][1])) \
         for j in range(self.nx_exp,self.nx))
     print("Finding optimal model inputs by maximising posterior. Bounds on x are:")
     print(bnds)
@@ -213,11 +228,10 @@ class GPMAP(MAP,GP):
     resx = np.zeros(self.nx_model)
     for i in range(self.nx_model):
       resx[i] = self.xconrevs[i+self.nx_exp].con(res.x[i])
-    self.x_opt = resx
-    self.xc_opt = res.x
+    self.xopt = res.x
+    self.xcopt = resx
 
-    print(f'Optimal converted model parameters are: {res.x}')
-    print(f'Reverted optimal model parameters are: {resx}')
+    print(f'Optimal model parameters are: {res.x}')
     print(f'Posterior is: {-res.fun:0.3f}')
 
 # Quick and dirty maximum a posteriori class using a GP
