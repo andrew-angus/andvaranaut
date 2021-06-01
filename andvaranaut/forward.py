@@ -29,6 +29,8 @@ class LHC(_core):
       raise Exception("Error: nsamps argument must be an integer > 0")
     print(f'Evaluating {nsamps} latin hypercube samples...')
     xsamps = self.__latin_sample(nsamps,seed)
+    if self.constraints is not None:
+      xsamps = self.__check_constraints(xsamps)
     xsamps,ysamps = self._core__vector_solver(xsamps)
 
     # Add new evaluations to original data arrays
@@ -48,6 +50,21 @@ class LHC(_core):
     xsamps = np.zeros_like(points)
     for j in range(self.nx):
       xsamps[:,j] = self.priors[j].ppf(points[:,j])
+    return xsamps
+
+  # Check proposed samples against all provided constraints
+  def __check_constraints(self,xsamps):
+    nsamps0 = len(xsamps)
+    mask = np.ones(nsamps0,dtype=bool)
+    for i,j in enumerate(xsamps):
+      for e,f in enumerate(self.constraints):
+        mask[i] = f(j)
+        if not mask[i]:
+          print(f'Sample {i+1} with x values {j} removed due to invalidaing constraint {e+1}.')
+    xsamps = xsamps[mask]
+    nsamps1 = len(xsamps)
+    if nsamps1 < nsamps0:
+      print(f'{nsamps0-nsamps1} samples removed due to violating constraints.')
     return xsamps
 
   # Delete n samples by selected method

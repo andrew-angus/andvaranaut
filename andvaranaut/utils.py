@@ -152,7 +152,7 @@ class normalise:
 
 # Core class which runs target function
 class _core():
-  def __init__(self,nx,ny,priors,target,parallel=False,nproc=1):
+  def __init__(self,nx,ny,priors,target,parallel=False,nproc=1,constraints=None):
     # Check inputs
     if (not isinstance(nx,int)) or (nx < 1):
       raise Exception('Error: must specify an integer number of input dimensions > 0') 
@@ -175,6 +175,14 @@ class _core():
       raise Exception("Error: nproc argument must be an integer > 0")
     assert (nproc <= mp.cpu_count()),\
         "Error: number of processors selected exceeds available."
+    if (not isinstance(constraints,list)) and (constraints is not None):
+      raise Exception(\
+          'Error: provided constraints must be list of functions which return boolean.') 
+    if constraints is not None:
+      for i in constraints:
+        if not callable(i):
+          raise Exception(\
+              'Error: provided constraints must be list of functions which return boolean.') 
     # Initialise attributes
     self.nx = nx # Input dimensions
     self.ny = ny # Output dimensions
@@ -182,6 +190,7 @@ class _core():
     self.target = target # Target function which takes X and returns Y
     self.parallel = parallel # Whether to use parallelism wherever possible
     self.nproc = nproc # Number of processors to use if using parallelism
+    self.constraints = constraints # List of constraint functions for sampler
 
   # Method which takes function, and 2D array of inputs
   # Then runs in parallel for each set of inputs
@@ -279,10 +288,9 @@ class _core():
     xsamps = xsamps[mask]
     ysamps = ysamps[mask]
 
-    # Final print on successful samples 
+    # Final print on time taken
     if verbose:
       print()
-      print(f'Sampling complete with {len(xsamps)/n_samples:0.1%} success rate.')
       print(f'Time taken: {t1-t0:0.2f} s')
 
     return xsamps, ysamps
