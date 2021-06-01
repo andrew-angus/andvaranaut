@@ -57,9 +57,25 @@ class LHC(_core):
     nsamps0 = len(xsamps)
     mask = np.ones(nsamps0,dtype=bool)
     for i,j in enumerate(xsamps):
-      for e,f in enumerate(self.constraints):
-        mask[i] = f(j)
-        if not mask[i]:
+      for e,f in enumerate(self.constraints['constraints']):
+        flag = True
+        res = f(j)
+        lower_bounds = self.constraints['lower_bounds'][e]
+        upper_bounds = self.constraints['upper_bounds'][e]
+        if isinstance(lower_bounds,list):
+          for k,l in enumerate(lower_bounds):
+            if res[k] < l:
+              flag = False
+          for k,l in enumerate(upper_bounds):
+            if res[k] > l:
+              flag = False
+        else:
+          if res < lower_bounds:
+            flag = False
+          elif res > upper_bounds:
+            flag = False
+        mask[i] = flag
+        if not flag:
           print(f'Sample {i+1} with x values {j} removed due to invalidaing constraint {e+1}.')
     xsamps = xsamps[mask]
     nsamps1 = len(xsamps)

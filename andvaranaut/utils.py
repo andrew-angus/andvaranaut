@@ -175,14 +175,14 @@ class _core():
       raise Exception("Error: nproc argument must be an integer > 0")
     assert (nproc <= mp.cpu_count()),\
         "Error: number of processors selected exceeds available."
-    if (not isinstance(constraints,list)) and (constraints is not None):
+    if (not isinstance(constraints,dict)) and (constraints is not None):
       raise Exception(\
-          'Error: provided constraints must be list of functions which return boolean.') 
+          f'Error: provided constraints must be a dictionary with keys {keys} and list items.') 
+    keys = ['constraints','lower_bounds','upper_bounds']
     if constraints is not None:
-      for i in constraints:
-        if not callable(i):
-          raise Exception(\
-              'Error: provided constraints must be list of functions which return boolean.') 
+      if not all(key in constraints for key in keys):
+        raise Exception(\
+          f'Error: provided constraints must be a dictionary with keys {keys} and list items.') 
     # Initialise attributes
     self.nx = nx # Input dimensions
     self.ny = ny # Output dimensions
