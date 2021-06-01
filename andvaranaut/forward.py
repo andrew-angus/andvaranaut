@@ -1,7 +1,7 @@
 #!/bin/python3
 
 import numpy as np
-from design import latin_random
+from design import latin_random,ihs
 import GPy
 import scipy.stats as st
 from time import time as stopwatch
@@ -36,11 +36,15 @@ class LHC(_core):
     self.y = np.r_[self.y,ysamps]
 
   # Produce latin hypercube samples from input distributions
-  def __latin_sample(self,nsamps,seed=None):
-    if seed is not None:
-      points = latin_random(nsamps,self.nx,seed)
+  def __latin_sample(self,nsamps,seed=None,improved=True):
+    if improved:
+      points = ihs(nsamps,self.nx,seed)
+      points = points/nsamps
+      # Shift points from borders
+      points = np.where(points < 1e-10,1e-10,points)
+      points = np.where(points > 1-1e-10,1-1e-10,points)
     else:
-      points = latin_random(nsamps,self.nx)
+      points = latin_random(nsamps,self.nx,seed)
     xsamps = np.zeros_like(points)
     for j in range(self.nx):
       xsamps[:,j] = self.priors[j].ppf(points[:,j])
@@ -329,7 +333,7 @@ class GP(_surrogate):
 
       # Get sample batch
       xsamps = np.zeros((newsamps,self.nx))
-      bnd = 0.999999999999999
+      bnd = 1-1e-10
       bnds = tuple((1-bnd,bnd) for j in range(self.nx))
       print('Getting batch of samples...')
       t0 = stopwatch()
