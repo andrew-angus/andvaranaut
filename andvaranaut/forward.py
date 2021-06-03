@@ -12,7 +12,7 @@ import numpy as np
 import copy
 from sklearn.model_selection import train_test_split
 from functools import partial
-from scipy.optimize import minimize,differential_evolution,NonlinearConstraint
+from scipy.optimize import minimize,differential_evolution,NonlinearConstraint,Bounds
 from andvaranaut.utils import _core,cdf
 import ray
 
@@ -266,13 +266,6 @@ class _surrogate(LHC):
     else:
       raise Exception("Error: surrogate argument must be of type bool")
 
-  # Wrapper of constraint function which operates on converted inputs
-  def __cconstraint(self,xc,constraint):
-    x = np.zeros_like(xc)
-    for i in range(self.nx):
-      x[i] = self.xconrevs[i].rev(xc[i])
-    return constraint(x)
-
 # Class to replace None types in surrogate conrev arguments
 class _none_conrev:
   def con(self,x):
@@ -375,13 +368,14 @@ class GP(_surrogate):
       xsamps = np.zeros((newsamps,self.nx))
       # Set bounds and constraints
       bnd = 1-1e-10
-      bnds = tuple((1-bnd,bnd) for j in range(self.nx))
+      bnds = Bounds([1-bnd for j in range(self.nx)],[bnd for j in range(self.nx)])
       if self.constraints is not None:
         cons = self.constraints['constraints']
         upps = self.constraints['upper_bounds']
         lows = self.constraints['lower_bounds']
-        cons = [partial(gpaux._surrogate__cconstraint,constraint=i) for i in cons]
+        cons = [partial(gpaux.__cconstraint,constraint=j) for j in cons]
         nlcs = tuple(NonlinearConstraint(cons[i],lows[i],upps[i]) for i in range(len(cons)))
+        constraints = {'constraints':cons,'lower_bounds':lows,'upper_bounds':upps}
       else:
         nlcs = tuple()
       print('Getting batch of samples...')
@@ -389,6 +383,7 @@ class GP(_surrogate):
       for j in range(newsamps):
         # Maximise PEI to get next sample then add to RF data
         res = differential_evolution(gpaux._GP__negative_PEI,bounds=bnds,constraints=nlcs)
+        print(res.x)
         x1 = np.expand_dims(res.x,axis=0)
         gpaux._xRF = np.r_[gpaux._xRF,x1]
         xsamps[j] = res.x
@@ -397,6 +392,8 @@ class GP(_surrogate):
       print(f'Time taken: {t1-t0:0.2f} s')
       plt.scatter(gpaux.xc[:,0],gpaux.xc[:,1])
       plt.scatter(xsamps[:,0],xsamps[:,1])
+      plt.xlim(0,1)
+      plt.ylim(0,1)
       plt.show()
 
       # Evaluate function at sample points and add to database
@@ -408,6 +405,14 @@ class GP(_surrogate):
       self.y = np.r_[self.y,ysamps]
       self._surrogate__con(newsamps)
 
+  # Wrapper of constraint function which operates on converted inputs for adaptive sampling opt
+  def __cconstraint(self,xc,constraint):
+    xc = np.where(xc<0,1e-10,xc)
+    xc = np.where(xc>1,1-1e-10,xc)
+    x = np.zeros_like(xc)
+    for i in range(self.nx):
+      x[i] = self.xconrevs[i].rev(xc[i])
+    return constraint(x)
 
   # Function for finding r which gives Kroot
   def __K_of_r_root(self,Kroot=1e-8):
@@ -442,12 +447,10 @@ class GP(_surrogate):
   # RF function
   def __RF(self,x):
     prod = 1.0
-    #prod = 0.0
     for i in self._xRF:
       i = np.expand_dims(i,axis=0)
       prod *= 1-self.m.kern.K(x,i)[0,0]/self.m.kern.variance[0]
-      #prod += np.log(1-self.m.kern.K(x,i)[0,0]/self.m.kern.variance[0])
-    return prod
+    return np.maximum(prod,np.finfo(np.float64).min)
 
   # Expected improvement function
   # If multiple outputs average EI is returned
@@ -459,20 +462,19 @@ class GP(_surrogate):
     EIs = np.zeros(self.ny)
     for i in range(self.ny):
       ydev = np.sqrt(prvar[0,i])
-      if ydev < devthresh:
+      if ydev == 0:
         EIs[i] = 0
       else:
         ydiff = pr[0,i]-maxye
         u = ydiff/ydev
         EIs[i] = ydiff*stdnorm.cdf(u)+ydev*stdnorm.pdf(u)
     return np.mean(EIs)
-    #return np.log(np.mean(EIs))
 
   # Pseudo-expected improvement func
   def __PEI(self,x):
     x = np.expand_dims(x,axis=0)
-    #return self.__EI(x)+self.__RF(x)
-    return self.__EI(x)*self.__RF(x)
+    return np.log(np.maximum(self.__EI(x),np.finfo(np.float64).tiny))\
+        +np.log(np.maximum(self.__RF(x),np.finfo(np.float64).tiny))
         
   # Negative PEI for minimisation
   def __negative_PEI(self,x):
