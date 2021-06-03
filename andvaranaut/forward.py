@@ -12,7 +12,7 @@ import numpy as np
 import copy
 from sklearn.model_selection import train_test_split
 from functools import partial
-from scipy.optimize import minimize,differential_evolution
+from scipy.optimize import minimize,differential_evolution,NonlinearConstraint
 from andvaranaut.utils import _core,cdf
 import ray
 
@@ -24,11 +24,11 @@ class LHC(_core):
     self.y = np.empty((0,self.ny))
 
   # Add n samples to current via latin hypercube sampling
-  def sample(self,nsamps,seed=None):
+  def sample(self,nsamps,seed=None,improved=True):
     if not isinstance(nsamps,int) or (nsamps < 1):
       raise Exception("Error: nsamps argument must be an integer > 0")
     print(f'Evaluating {nsamps} latin hypercube samples...')
-    xsamps = self.__latin_sample(nsamps,seed)
+    xsamps = self.__latin_sample(nsamps,seed,improved)
     if self.constraints is not None:
       xsamps = self.__check_constraints(xsamps)
     xsamps,ysamps = self._core__vector_solver(xsamps)
@@ -266,6 +266,13 @@ class _surrogate(LHC):
     else:
       raise Exception("Error: surrogate argument must be of type bool")
 
+  # Wrapper of constraint function which operates on converted inputs
+  def __cconstraint(self,xc,constraint):
+    x = np.zeros_like(xc)
+    for i in range(self.nx):
+      x[i] = self.xconrevs[i].rev(xc[i])
+    return constraint(x)
+
 # Class to replace None types in surrogate conrev arguments
 class _none_conrev:
   def con(self,x):
@@ -366,13 +373,22 @@ class GP(_surrogate):
 
       # Get sample batch
       xsamps = np.zeros((newsamps,self.nx))
+      # Set bounds and constraints
       bnd = 1-1e-10
       bnds = tuple((1-bnd,bnd) for j in range(self.nx))
+      if self.constraints is not None:
+        cons = self.constraints['constraints']
+        upps = self.constraints['upper_bounds']
+        lows = self.constraints['lower_bounds']
+        cons = [partial(gpaux._surrogate__cconstraint,constraint=i) for i in cons]
+        nlcs = tuple(NonlinearConstraint(cons[i],lows[i],upps[i]) for i in range(len(cons)))
+      else:
+        nlcs = tuple()
       print('Getting batch of samples...')
       t0 = stopwatch()
       for j in range(newsamps):
         # Maximise PEI to get next sample then add to RF data
-        res = differential_evolution(gpaux._GP__negative_PEI,bounds=bnds)
+        res = differential_evolution(gpaux._GP__negative_PEI,bounds=bnds,constraints=nlcs)
         x1 = np.expand_dims(res.x,axis=0)
         gpaux._xRF = np.r_[gpaux._xRF,x1]
         xsamps[j] = res.x
@@ -391,6 +407,7 @@ class GP(_surrogate):
       self.x = np.r_[self.x,xsamps]
       self.y = np.r_[self.y,ysamps]
       self._surrogate__con(newsamps)
+
 
   # Function for finding r which gives Kroot
   def __K_of_r_root(self,Kroot=1e-8):
@@ -569,7 +586,7 @@ class GP(_surrogate):
       for i in range(self.ny):
         plt.title(f'y[{i}]')
         plt.plot(ytest[:,i],ytest[:,i],'-',label='True')
-        plt.plot(ytest[:,i],ypred[:,i],'x',label='GP')
+        plt.plot(ytest[:,i],ypred[:,i],'X',label='GP')
         plt.ylabel(f'y[{i}]')
         plt.xlabel(f'y[{i}]')
         plt.legend()
