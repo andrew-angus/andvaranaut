@@ -8,6 +8,7 @@ import scipy.stats as st
 import copy
 import GPy
 from scipy.misc import derivative
+from time import time as stopwatch
 
 # Maximum a posteriori class
 class MAP(_core):
@@ -96,11 +97,14 @@ class MAP(_core):
     bnds = tuple(self.priors[i+self.nx_exp].interval(bnd) for i in range(self.nx_model))
     print("Finding optimal inputs by maximising posterior. Bounds on x are:")
     print(bnds)
-    res = differential_evolution(self.__negative_log_posterior,bounds=bnds)
+    t0 = stopwatch()
+    res = self._core__DE(self.__negative_log_posterior,bounds=bnds)
+    t1 = stopwatch()
     self.xopt = res.x
 
-    print(f'Optimal converted model parameters are: {res.x}')
+    print(f'Optimal model parameters are: {res.x}')
     print(f'Posterior is: {-res.fun:0.3f}')
+    print(f'Time taken: {t1-t0:0.1f} s')
 
 # MAP class using a GP
 class GPMAP(MAP,GP):
@@ -224,7 +228,9 @@ class GPMAP(MAP,GP):
         for j in range(self.nx_exp,self.nx))
     print("Finding optimal model inputs by maximising posterior. Bounds on x are:")
     print(bnds)
-    res = differential_evolution(self.__negative_rev_log_posterior,bounds=bnds)
+    t0 = stopwatch()
+    res = self._core__DE(self.__negative_rev_log_posterior,bounds=bnds)
+    t1 = stopwatch()
     resx = np.zeros(self.nx_model)
     for i in range(self.nx_model):
       resx[i] = self.xconrevs[i+self.nx_exp].con(res.x[i])
@@ -233,6 +239,7 @@ class GPMAP(MAP,GP):
 
     print(f'Optimal model parameters are: {res.x}')
     print(f'Posterior is: {-res.fun:0.3f}')
+    print(f'Time taken: {t1-t0:0.1f} s')
 
 # Quick and dirty maximum a posteriori class using a GP
 class gpmap:
