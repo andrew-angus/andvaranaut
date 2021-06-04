@@ -199,7 +199,7 @@ class _core():
 
     # Run function in parallel in individual directories    
     if not ray.is_initialized():
-      ray.init(num_cpus=self.nproc,log_to_driver=False)
+      ray.init(num_cpus=self.nproc)#,log_to_driver=False)
     l = len(inps)
     all_ids = [_parallel_wrap.remote(self.target,inps[i],i) for i in range(l)]
 
@@ -233,7 +233,8 @@ class _core():
     t0 = stopwatch()
     n_samples = len(xsamps)
     # Create directory for tasks
-    os.system('mkdir runs')
+    if not os.path.isdir('runs'):
+      os.mkdir('runs')
     # Parallel execution using ray
     if self.parallel:
       ysamps,fails = self.__parallel_runs(xsamps,verbose)
@@ -299,7 +300,8 @@ class _core():
 @ray.remote(max_retries=0)
 def _parallel_wrap(fun,inp,idx):
   d = f'./runs/task{idx}'
-  os.system(f'mkdir {d}')
+  if not os.path.isdir(d):
+    os.mkdir(d)
   os.chdir(d)
   res = fun(inp)
   os.chdir('../..')
