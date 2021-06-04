@@ -205,14 +205,18 @@ class _core():
 
     # Get ids as they complete or fail, give warning on fail
     outs = []; fails = np.empty(0,dtype=np.intc)
+    id_order = np.empty(0,dtype=np.intc)
     ids = copy.deepcopy(all_ids)
     lold = l
     while lold:
       done_id,ids = ray.wait(ids)
       try:
         outs += ray.get(done_id)
+        idx = all_ids.index(done_id[0]) 
+        id_order = np.append(id_order,idx)
       except:
         idx = all_ids.index(done_id[0]) 
+        id_order = np.append(id_order,idx)
         fails = np.append(fails,idx)
         print(f"Warning: parallel run {idx+1} failed with x values {inps[idx]}.",\
           "\nCheck number of inputs/outputs and whether input ranges are valid.")
@@ -224,7 +228,9 @@ class _core():
     #ray.shutdown()
     
     # Reshape outputs to 2D array
-    outs = np.array(outs).reshape((len(outs),self.ny))
+    oldouts = np.array(outs).reshape((len(outs),self.ny))
+    outs = np.zeros_like(oldouts)
+    outs[id_order] = oldouts
 
     return outs, fails
 
