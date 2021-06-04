@@ -361,7 +361,6 @@ class GP(_surrogate):
       gpaux.m = gpaux._GP__fit(gpaux.xc,gpaux.yc,restarts=restarts,minl=True)
 
       # Create repulsive function dataset
-      #gpaux._gp__create_xRF()
       gpaux._xRF = copy.deepcopy(gpaux.xc)
 
       # Get sample batch
@@ -413,30 +412,6 @@ class GP(_surrogate):
     def min_fun(r,Kroot):
       return np.abs(self.m.kern.K_of_r(r)-Kroot)
     return minimize(min_fun,1.0,args=Kroot,tol=Kroot/100).x[0]
-
-  # Create repulsive function dataset
-  ## REDUNDANT
-  def __create_xRF(self):
-    # Existing dataset
-    self._xRF = copy.deepcopy(self.xc)
-    # Add corners of input space
-    xmaxs = np.array([self.xconrevs[i].con(self.priors[i].ppf(1))\
-        for i in range(self.nx)])
-    xmins = np.array([self.xconrevs[i].con(self.priors[i].isf(1))\
-        for i in range(self.nx)])
-    xmaxmins = ([xmaxs[i],xmins[i]] for i in range(self.nx))
-    xgrid = np.meshgrid(*xmaxmins)
-    xcoords = np.array(list(zip(*(i.flat for i in xgrid))))
-    self._xRF = np.r_[self._xRF,xcoords]
-    # Add closest boundary points to current dataset
-    amaxs = np.argmax(self.xc,axis=0)
-    amins = np.argmin(self.xc,axis=0)
-    xmaxds = self.xc[amaxs]
-    xminds = self.xc[amins]
-    for i in range(self.nx):
-      xmaxds[i,i] = xmaxs[i]
-      xminds[i,i] = xmins[i]
-    self._xRF = np.r_[self._xRF,xmaxds,xminds]
 
   # RF function
   def __RF(self,x):
