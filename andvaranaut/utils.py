@@ -10,6 +10,7 @@ import multiprocessing as mp
 from time import time as stopwatch
 import os
 import copy
+from scipy.optimize import differential_evolution,NonlinearConstraint
 
 # Save and load with pickle
 # ToDo: Faster with cpickle 
@@ -301,6 +302,19 @@ class _core():
       print(f'Time taken: {t1-t0:0.2f} s')
 
     return xsamps, ysamps
+
+  def __DE(self,fun,**kwargs):
+    # Construct constraints object if using
+    if self.constraints is not None:
+      cons = self.constraints['constraints']
+      upps = self.constraints['upper_bounds']
+      lows = self.constraints['lower_bounds']
+      nlcs = tuple(NonlinearConstraint(cons[i],lows[i],upps[i]) for i in range(len(cons)))
+    else:
+      nlcs = tuple()
+    kwargs['constraints'] = nlcs
+    res = differential_evolution(fun,**kwargs)
+    return res
 
 # Function which wraps serial function for executing in parallel directories
 @ray.remote(max_retries=0)

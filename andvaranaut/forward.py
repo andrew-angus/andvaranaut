@@ -356,7 +356,7 @@ class GP(_surrogate):
                  xconrevs=xconrevs,yconrevs=yconrevs,\
                  parallel=self.parallel,\
                  nproc=self.nproc,priors=self.priors,\
-                 target=self.target)
+                 target=self.target,constraints=copy.deepcopy(self.constraints))
       gpaux.set_data(self.x,eseloo)
       gpaux.m = gpaux._GP__fit(gpaux.xc,gpaux.yc,restarts=restarts,minl=True)
 
@@ -370,19 +370,13 @@ class GP(_surrogate):
       bnd = 1-1e-10
       bnds = Bounds([1-bnd for j in range(self.nx)],[bnd for j in range(self.nx)])
       if self.constraints is not None:
-        cons = self.constraints['constraints']
-        upps = self.constraints['upper_bounds']
-        lows = self.constraints['lower_bounds']
-        cons = [partial(gpaux.__cconstraint,constraint=j) for j in cons]
-        nlcs = tuple(NonlinearConstraint(cons[i],lows[i],upps[i]) for i in range(len(cons)))
-        constraints = {'constraints':cons,'lower_bounds':lows,'upper_bounds':upps}
-      else:
-        nlcs = tuple()
+        gpaux.constraints['constraints'] = [partial(gpaux._GP__cconstraint,constraint=j) \
+            for j in self.constraints['constraints']]
       print('Getting batch of samples...')
       t0 = stopwatch()
       for j in range(newsamps):
         # Maximise PEI to get next sample then add to RF data
-        res = differential_evolution(gpaux._GP__negative_PEI,bounds=bnds,constraints=nlcs)
+        res = gpaux._core__DE(gpaux._GP__negative_PEI,bounds=bnds)
         print(res.x)
         x1 = np.expand_dims(res.x,axis=0)
         gpaux._xRF = np.r_[gpaux._xRF,x1]
@@ -663,4 +657,3 @@ class GP(_surrogate):
 @ray.remote
 def _parallel_predict(x,predfun):
   return predfun(x)
-
