@@ -91,14 +91,14 @@ class MAP(_core):
   def __negative_log_posterior(self,x):
     return -self.log_posterior(x)
     
-  def opt(self):
+  def opt(self,method='DE',opt_restarts=10):
     # Bounds which try and avoid extrapolation
     bnd = 0.999999999999999
     bnds = tuple(self.priors[i+self.nx_exp].interval(bnd) for i in range(self.nx_model))
     print("Finding optimal inputs by maximising posterior. Bounds on x are:")
     print(bnds)
     t0 = stopwatch()
-    res = self._core__DE(self.__negative_log_posterior,bounds=bnds)
+    res = self._core__opt(self.__negative_log_posterior,method,self.nx_model,opt_restarts,bounds=bnds)
     t1 = stopwatch()
     self.xopt = res.x
 
@@ -219,7 +219,7 @@ class GPMAP(MAP,GP):
     return pc
 
   # Change opt method to use GP data bounds and reversion of optimised x values
-  def opt(self):
+  def opt(self,method='DE',opt_restarts=10):
     # Bounds which try and avoid extrapolation
     # Also avoid calculating conversion derivative at bounds
     maxbnds = [i.interval(1-1e-3) for i in self.priors]
@@ -229,7 +229,7 @@ class GPMAP(MAP,GP):
     print("Finding optimal model inputs by maximising posterior. Bounds on x are:")
     print(bnds)
     t0 = stopwatch()
-    res = self._core__DE(self.__negative_rev_log_posterior,bounds=bnds)
+    res = self._core__opt(self.__negative_rev_log_posterior,method,self.nx_model,opt_restarts,bounds=bnds)
     t1 = stopwatch()
     resx = np.zeros(self.nx_model)
     for i in range(self.nx_model):

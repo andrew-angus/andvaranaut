@@ -10,7 +10,8 @@ import multiprocessing as mp
 from time import time as stopwatch
 import os
 import copy
-from scipy.optimize import differential_evolution,NonlinearConstraint
+from scipy.optimize import differential_evolution,NonlinearConstraint,minimize
+from design import ihs
 
 # Save and load with pickle
 # ToDo: Faster with cpickle 
@@ -200,7 +201,7 @@ class _core():
 
     # Run function in parallel in individual directories    
     if not ray.is_initialized():
-      ray.init(num_cpus=self.nproc)#,log_to_driver=False)
+      ray.init(num_cpus=self.nproc)
     l = len(inps)
     all_ids = [_parallel_wrap.remote(self.target,inps[i],i) for i in range(l)]
 
@@ -303,7 +304,9 @@ class _core():
 
     return xsamps, ysamps
 
-  def __DE(self,fun,**kwargs):
+  # Core optimizer implementing bounds and constraints
+  # Global optisation done either with differential evolution or local minimisation with restarts
+  def __opt(self,fun,method,nx,restarts=10,**kwargs):
     # Construct constraints object if using
     if self.constraints is not None:
       cons = self.constraints['constraints']
@@ -313,8 +316,104 @@ class _core():
     else:
       nlcs = tuple()
     kwargs['constraints'] = nlcs
-    res = differential_evolution(fun,**kwargs)
+    # Global opt method choice
+    if method == 'DE':
+      res = differential_evolution(fun,**kwargs)
+    else:
+      # Add buffer to nlcs to stop overshoot
+      buff = 1e-8
+      for i in nlcs:
+        i.lb += buff
+        i.ub -= buff
+      # Draw starting point samples
+      points = ihs(restarts,nx)/restarts
+      # Scale by bounds
+      bnds = kwargs['bounds']
+      points = self.__bounds_scale(points,nx,bnds)
+      # Check against constraints and replace if invalid
+      if self.constraints is not None:
+        points = self.__check_constraints(points)
+        npoints = len(points)
+        # Add points by random sampling and repeat till all valid
+        while npoints != restarts:
+          nnew = restarts - npoints
+          newpoints = np.random.rand(nnew,nx)
+          newpoints = self.__bounds_scale(newpoints,nx,bnds)
+          newpoints = self.__check_constraints(newpoints)
+          points = np.r_[points,newpoints]
+          npoints = len(points)
+
+      # Conduct minimisations
+      if self.parallel:
+        if not ray.is_initialized():
+          ray.init(num_cpus=self.nproc)
+        # Switch off further parallelism within minimized function
+        self.parallel = False
+        try:
+          results = ray.get([_minimize_wrap.remote(fun,i,**kwargs) for i in points])
+          self.parallel = True
+        except:
+          self.parallel = True
+          raise Exception
+      else:
+        results = []
+        for i in points:
+          res = minimize(fun,i,**kwargs)
+          results.append(res)
+
+      # Get best result
+      f_vals = np.array([i.fun for i in results])
+      f_success = [i.success for i in results]
+      if not any(f_success):
+        print('Warning: All minimizations unsuccesful')
+      elif not all(f_success):
+        print('Removing failed minimizations...')
+        f_vals = f_vals[f_success]
+        idx = np.arange(len(results))
+        idx = idx[f_success]
+        results = [results[i] for i in idx]
+
+      best = np.argmin(f_vals)
+      res = results[best]
+
     return res
+
+  # Check proposed samples against all provided constraints
+  def __check_constraints(self,xsamps):
+    nsamps0 = len(xsamps)
+    mask = np.ones(nsamps0,dtype=bool)
+    for i,j in enumerate(xsamps):
+      for e,f in enumerate(self.constraints['constraints']):
+        flag = True
+        res = f(j)
+        lower_bounds = self.constraints['lower_bounds'][e]
+        upper_bounds = self.constraints['upper_bounds'][e]
+        if isinstance(lower_bounds,list):
+          for k,l in enumerate(lower_bounds):
+            if res[k] < l:
+              flag = False
+          for k,l in enumerate(upper_bounds):
+            if res[k] > l:
+              flag = False
+        else:
+          if res < lower_bounds:
+            flag = False
+          elif res > upper_bounds:
+            flag = False
+        mask[i] = flag
+        if not flag:
+          print(f'Sample {i+1} with x values {j} removed due to invalidaing constraint {e+1}.')
+    xsamps = xsamps[mask]
+    nsamps1 = len(xsamps)
+    if nsamps1 < nsamps0:
+      print(f'{nsamps0-nsamps1} samples removed due to violating constraints.')
+    return xsamps
+
+  def __bounds_scale(self,points,nx,bnds):
+    for i in range(nx):
+      points[:,i] *= bnds.ub[i]-bnds.lb[i]
+      points[:,i] += bnds.lb[i]
+    return points
 
 # Function which wraps serial function for executing in parallel directories
 @ray.remote(max_retries=0)
@@ -327,3 +426,8 @@ def _parallel_wrap(fun,inp,idx):
   os.chdir('../..')
   return res
  
+# Function which wraps serial function for executing in parallel directories
+@ray.remote(max_retries=0)
+def _minimize_wrap(fun,x0,**kwargs):
+  res = minimize(fun,x0,method='SLSQP',**kwargs)
+  return res

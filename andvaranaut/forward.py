@@ -30,7 +30,7 @@ class LHC(_core):
     print(f'Evaluating {nsamps} latin hypercube samples...')
     xsamps = self.__latin_sample(nsamps,seed,improved)
     if self.constraints is not None:
-      xsamps = self.__check_constraints(xsamps)
+      xsamps = self._core__check_constraints(xsamps)
     xsamps,ysamps = self._core__vector_solver(xsamps)
 
     # Add new evaluations to original data arrays
@@ -50,37 +50,6 @@ class LHC(_core):
     xsamps = np.zeros_like(points)
     for j in range(self.nx):
       xsamps[:,j] = self.priors[j].ppf(points[:,j])
-    return xsamps
-
-  # Check proposed samples against all provided constraints
-  def __check_constraints(self,xsamps):
-    nsamps0 = len(xsamps)
-    mask = np.ones(nsamps0,dtype=bool)
-    for i,j in enumerate(xsamps):
-      for e,f in enumerate(self.constraints['constraints']):
-        flag = True
-        res = f(j)
-        lower_bounds = self.constraints['lower_bounds'][e]
-        upper_bounds = self.constraints['upper_bounds'][e]
-        if isinstance(lower_bounds,list):
-          for k,l in enumerate(lower_bounds):
-            if res[k] < l:
-              flag = False
-          for k,l in enumerate(upper_bounds):
-            if res[k] > l:
-              flag = False
-        else:
-          if res < lower_bounds:
-            flag = False
-          elif res > upper_bounds:
-            flag = False
-        mask[i] = flag
-        if not flag:
-          print(f'Sample {i+1} with x values {j} removed due to invalidaing constraint {e+1}.')
-    xsamps = xsamps[mask]
-    nsamps1 = len(xsamps)
-    if nsamps1 < nsamps0:
-      print(f'{nsamps0-nsamps1} samples removed due to violating constraints.')
     return xsamps
 
   # Delete n samples by selected method
@@ -288,7 +257,7 @@ class GP(_surrogate):
     self.ytest = None
 
   # Sample method inherits lhc sampling and adds adaptive sampling option
-  def sample(self,nsamps,method='lhc',batchsize=1,restarts=10,seed=None):
+  def sample(self,nsamps,method='lhc',batchsize=1,restarts=10,seed=None,opt_method='DE',opt_restarts=10):
     methods = ['lhc','adaptive']
     if method not in methods:
       raise Exception(f'Error: method must be one of {methods}')
@@ -297,12 +266,12 @@ class GP(_surrogate):
     else:
       if self.x.shape[0] < 2:
         raise Exception("Error: require at least 2 LHC samples to perform adaptive sampling.")
-      self.__adaptive_sample(nsamps,batchsize,restarts)
+      self.__adaptive_sample(nsamps,batchsize,restarts,opt_method,opt_restarts)
 
   # Adaptive sampler based on Mohammadi, Hossein, et al. 
   # "Cross-validation based adaptive sampling for Gaussian process models." 
   # arXiv preprint arXiv:2005.01814 (2020).
-  def __adaptive_sample(self,nsamps,batchsize,restarts):
+  def __adaptive_sample(self,nsamps,batchsize,restarts,opt_method,opt_restarts):
     # Determine number of batches and new samples in each batch
     batches = round(float(np.ceil(nsamps/batchsize)))
     for i in range(batches):
@@ -335,7 +304,9 @@ class GP(_surrogate):
         # Calculate ESE_loo
         ##Todo: Revert here before calculating ese_loo?
         for k in range(self.ny):
-          ym = pr[0,k]; yv = prvar[0,k]
+          ym = pr[0,k]
+          yv = prvar[0,k]
+          #yv = np.mean(prvar)
           #ym = self.yconrevs[k].rev(pr[0,k])
           #yv = self.yconrevs[k].rev(np.sqrt(prvar[0,k]))**2
           fxi = self.yc[j,k]
@@ -368,14 +339,18 @@ class GP(_surrogate):
       # Set bounds and constraints
       bnd = 1-1e-10
       bnds = Bounds([1-bnd for j in range(self.nx)],[bnd for j in range(self.nx)])
+      print(bnds)
+      kwargs = {'bounds':bnds}
       if self.constraints is not None:
         gpaux.constraints['constraints'] = [partial(gpaux._GP__cconstraint,constraint=j) \
             for j in self.constraints['constraints']]
+      if opt_method =='DE':
+        kwargs['polish'] = False
       print('Getting batch of samples...')
       t0 = stopwatch()
       for j in range(newsamps):
         # Maximise PEI to get next sample then add to RF data
-        res = gpaux._core__DE(gpaux._GP__negative_PEI,bounds=bnds)
+        res = gpaux._core__opt(gpaux._GP__negative_PEI,opt_method,gpaux.nx,opt_restarts,**kwargs)
         print(res.x)
         x1 = np.expand_dims(res.x,axis=0)
         gpaux._xRF = np.r_[gpaux._xRF,x1]
@@ -400,8 +375,8 @@ class GP(_surrogate):
 
   # Wrapper of constraint function which operates on converted inputs for adaptive sampling opt
   def __cconstraint(self,xc,constraint):
-    xc = np.where(xc<0,1e-10,xc)
-    xc = np.where(xc>1,1-1e-10,xc)
+    #xc = np.where(xc<0,1e-10,xc)
+    #xc = np.where(xc>1,1-1e-10,xc)
     x = np.zeros_like(xc)
     for i in range(self.nx):
       x[i] = self.xconrevs[i].rev(xc[i])
@@ -442,11 +417,14 @@ class GP(_surrogate):
   # Pseudo-expected improvement func
   def __PEI(self,x):
     x = np.expand_dims(x,axis=0)
-    return np.log(np.maximum(self.__EI(x),np.finfo(np.float64).tiny))\
+    res = np.log(np.maximum(self.__EI(x),np.finfo(np.float64).tiny))\
         +np.log(np.maximum(self.__RF(x),np.finfo(np.float64).tiny))
+    return res
         
   # Negative PEI for minimisation
   def __negative_PEI(self,x):
+    #print(f'Iteration: {self.iter}; x: {x}; constraint_fun: {self.constraints["constraints"][0](x)}')
+    #self.iter += 1
     return -self.__PEI(x)
 
   # Inherit del_samples and extend to remove test-train datasets
