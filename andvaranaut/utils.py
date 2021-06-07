@@ -356,6 +356,7 @@ class _core():
           self.parallel = True
         except:
           self.parallel = True
+          ray.shutdown()
           raise Exception
       else:
         results = []
