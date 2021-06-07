@@ -328,8 +328,8 @@ class GP(_surrogate):
                  parallel=self.parallel,\
                  nproc=self.nproc,priors=self.priors,\
                  target=self.target,constraints=copy.deepcopy(self.constraints))
-      gpaux.set_data(self.x,eseloo)
-      gpaux.m = gpaux._GP__fit(gpaux.xc,gpaux.yc,restarts=restarts,minl=True)
+      gpaux.set_data(self.x,eseloo-np.sqrt(0.5))
+      gpaux.m = gpaux._GP__fit(gpaux.xc,gpaux.yc,restarts=restarts,minl=True,normalise=False)
 
       # Create repulsive function dataset
       gpaux._xRF = copy.deepcopy(gpaux.xc)
@@ -403,7 +403,7 @@ class GP(_surrogate):
     pr,prvar = self.m.predict(x)
     EIs = np.zeros(self.ny)
     for i in range(self.ny):
-      ydev = np.sqrt(prvar[0,i])
+      ydev = np.sqrt(np.mean(prvar))
       if ydev == 0:
         EIs[i] = 0
       else:
