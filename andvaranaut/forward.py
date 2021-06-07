@@ -257,7 +257,7 @@ class GP(_surrogate):
     self.ytest = None
 
   # Sample method inherits lhc sampling and adds adaptive sampling option
-  def sample(self,nsamps,method='lhc',batchsize=1,restarts=10,seed=None,opt_method='DE',opt_restarts=10):
+  def sample(self,nsamps,method='lhc',batchsize=1,restarts=10,seed=None,opt_method='DE',opt_restarts=10,normalise=True):
     methods = ['lhc','adaptive']
     if method not in methods:
       raise Exception(f'Error: method must be one of {methods}')
@@ -266,19 +266,19 @@ class GP(_surrogate):
     else:
       if self.x.shape[0] < 2:
         raise Exception("Error: require at least 2 LHC samples to perform adaptive sampling.")
-      self.__adaptive_sample(nsamps,batchsize,restarts,opt_method,opt_restarts)
+      self.__adaptive_sample(nsamps,batchsize,restarts,opt_method,opt_restarts,normalise)
 
   # Adaptive sampler based on Mohammadi, Hossein, et al. 
   # "Cross-validation based adaptive sampling for Gaussian process models." 
   # arXiv preprint arXiv:2005.01814 (2020).
-  def __adaptive_sample(self,nsamps,batchsize,restarts,opt_method,opt_restarts):
+  def __adaptive_sample(self,nsamps,batchsize,restarts,opt_method,opt_restarts,normalise):
     # Determine number of batches and new samples in each batch
     batches = round(float(np.ceil(nsamps/batchsize)))
     for i in range(batches):
       newsamps = np.minimum(nsamps-i*batchsize,batchsize)
 
       # Fit GP to current samples
-      self.fit(restarts)
+      self.fit(restarts,normalise=normalise)
 
       # Keep hyperparameters and evaluate ESE_loo for each data point
       csamps = len(self.x)
@@ -433,21 +433,21 @@ class GP(_surrogate):
     self.__scrub_train_test()
 
   # Fit GP standard method
-  def fit(self,restarts=10):
-    self.m = self.__fit(self.xc,self.yc,restarts=restarts)
+  def fit(self,restarts=10,normalise=True):
+    self.m = self.__fit(self.xc,self.yc,restarts,normalise=normalise)
 
   # More flexible private fit method which can use unconverted or train-test datasets
-  def __fit(self,x,y,restarts=10,opt=True,minl=False):
+  def __fit(self,x,y,restarts=10,opt=True,minl=False,normalise=True):
     # Get correct GPy kernel
     kstring = 'GPy.kern.'+self.kernel+'(input_dim=self.nx,variance=1.,lengthscale=1.,ARD=True)'
     kern = eval(kstring)
     # Fit and return model
     if not self.noise:
       meps = np.finfo(np.float64).eps
-      m = GPy.models.GPRegression(x,y,kern,noise_var=meps,normalizer=True)
+      m = GPy.models.GPRegression(x,y,kern,noise_var=meps,normalizer=normalise)
       m.likelihood.fix()
     else:
-      m = GPy.models.GPRegression(x,y,kern,noise_var=1.0,normalizer=True)
+      m = GPy.models.GPRegression(x,y,kern,noise_var=1.0,normalizer=normalise)
     if opt:
       t0 = stopwatch()
       if minl:
