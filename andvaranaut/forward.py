@@ -292,7 +292,7 @@ class GP(_surrogate):
         y_loo = np.delete(self.yc,j,axis=0)
 
         # Fit GP using saved hyperparams
-        mloo = self.__fit(x_loo,y_loo,restarts=restarts,opt=False)
+        mloo = self.__fit(x_loo,y_loo,restarts=restarts,opt=False,normalise=normalise)
         mloo.kern.variance = self.m.kern.variance
         mloo.kern.lengthscale = self.m.kern.lengthscale
         if self.noise:
@@ -305,8 +305,8 @@ class GP(_surrogate):
         ##Todo: Revert here before calculating ese_loo?
         for k in range(self.ny):
           ym = pr[0,k]
-          yv = prvar[0,k]
-          #yv = np.mean(prvar)
+          #yv = prvar[0,k]
+          yv = np.mean(prvar)
           #ym = self.yconrevs[k].rev(pr[0,k])
           #yv = self.yconrevs[k].rev(np.sqrt(prvar[0,k]))**2
           fxi = self.yc[j,k]
@@ -375,8 +375,6 @@ class GP(_surrogate):
 
   # Wrapper of constraint function which operates on converted inputs for adaptive sampling opt
   def __cconstraint(self,xc,constraint):
-    #xc = np.where(xc<0,1e-10,xc)
-    #xc = np.where(xc>1,1-1e-10,xc)
     x = np.zeros_like(xc)
     for i in range(self.nx):
       x[i] = self.xconrevs[i].rev(xc[i])
