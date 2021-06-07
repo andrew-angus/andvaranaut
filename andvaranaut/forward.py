@@ -15,6 +15,7 @@ from functools import partial
 from scipy.optimize import minimize,differential_evolution,NonlinearConstraint,Bounds
 from andvaranaut.utils import _core,cdf
 import ray
+from matplotlib import ticker
 
 # Latin hypercube sampler and propagator, inherits core
 class LHC(_core):
@@ -318,6 +319,7 @@ class GP(_surrogate):
         print(f'{(j+1)/csamps:0.1%} complete.',end='\r')
       t1 = stopwatch()
       print(f'Time taken: {t1-t0:0.2f} s')
+
       
       # Fit auxillary GP to ESE_loo
       print('Fitting auxillary GP to ESE_loo data...')
@@ -330,6 +332,7 @@ class GP(_surrogate):
                  target=self.target,constraints=copy.deepcopy(self.constraints))
       gpaux.set_data(self.x,eseloo-np.sqrt(0.5))
       gpaux.m = gpaux._GP__fit(gpaux.xc,gpaux.yc,restarts=restarts,minl=True,normalise=False)
+      print(gpaux.m[''])
 
       # Create repulsive function dataset
       gpaux._xRF = copy.deepcopy(gpaux.xc)
@@ -353,7 +356,9 @@ class GP(_surrogate):
         res = gpaux._core__opt(gpaux._GP__negative_PEI,opt_method,gpaux.nx,opt_restarts,**kwargs)
         print(res.x)
         x1 = np.expand_dims(res.x,axis=0)
-        gpaux._xRF = np.r_[gpaux._xRF,x1]
+        # Add multiple copies of this to batch to avoid clustering
+        for k in range(10):
+          gpaux._xRF = np.r_[gpaux._xRF,x1]
         xsamps[j] = res.x
         print(f'{(j+1)/newsamps:0.1%} complete.',end='\r')
       t1 = stopwatch()
@@ -381,27 +386,32 @@ class GP(_surrogate):
     return constraint(x)
 
   # Function for finding r which gives Kroot
-  def __K_of_r_root(self,Kroot=1e-8):
+  def __K_of_r_root(self,Kroot=1e-10):
     def min_fun(r,Kroot):
       return np.abs(self.m.kern.K_of_r(r)-Kroot)
     return minimize(min_fun,1.0,args=Kroot,tol=Kroot/100).x[0]
 
   # RF function
   def __RF(self,x):
+    x = np.expand_dims(x,axis=0)
     prod = 1.0
+    #prod = 0.0
+    #tiny = np.finfo(np.float64).tiny
     for i in self._xRF:
       i = np.expand_dims(i,axis=0)
       prod *= 1-self.m.kern.K(x,i)[0,0]/self.m.kern.variance[0]
-    return np.maximum(prod,np.finfo(np.float64).min)
+      #prod += np.log(np.maximum(1-self.m.kern.K(x,i)[0,0]/self.m.kern.variance[0],tiny))
+    return prod
 
   # Expected improvement function
   # If multiple outputs average EI is returned
   def __EI(self,x):
+    x = np.expand_dims(x,axis=0)
     maxye = np.max(self.yc)
-    devthresh = 1e-4
     stdnorm = st.norm()
     pr,prvar = self.m.predict(x)
     EIs = np.zeros(self.ny)
+    tiny = np.finfo(np.float64).tiny
     for i in range(self.ny):
       ydev = np.sqrt(np.mean(prvar))
       if ydev == 0:
@@ -410,13 +420,17 @@ class GP(_surrogate):
         ydiff = pr[0,i]-maxye
         u = ydiff/ydev
         EIs[i] = ydiff*stdnorm.cdf(u)+ydev*stdnorm.pdf(u)
+        #EIs[i] = np.exp(np.log(np.maximum(ydiff,tiny))+stdnorm.logcdf(u))\
+        #    +np.exp(np.log(np.maximum(ydev,tiny))+stdnorm.logpdf(u))
+    #return np.log(np.maximum(np.mean(EIs),tiny))
     return np.mean(EIs)
 
   # Pseudo-expected improvement func
   def __PEI(self,x):
-    x = np.expand_dims(x,axis=0)
     res = np.log(np.maximum(self.__EI(x),np.finfo(np.float64).tiny))\
         +np.log(np.maximum(self.__RF(x),np.finfo(np.float64).tiny))
+    #res = self.__EI(x)*self.__RF(x)
+    #res = self.__EI(x) + self.__RF(x)
     return res
         
   # Negative PEI for minimisation
