@@ -209,7 +209,7 @@ class _core():
     outs = []; fails = np.empty(0,dtype=np.intc)
     id_order = np.empty(0,dtype=np.intc)
     ids = copy.deepcopy(all_ids)
-    lold = l
+    lold = l; flag = False
     while lold:
       done_id,ids = ray.wait(ids)
       try:
@@ -220,6 +220,7 @@ class _core():
         idx = all_ids.index(done_id[0]) 
         id_order = np.append(id_order,idx)
         fails = np.append(fails,idx)
+        flag = True
         print(f"Warning: parallel run {idx+1} failed with x values {inps[idx]}.",\
           "\nCheck number of inputs/outputs and whether input ranges are valid.")
       lnew = len(ids)
@@ -227,7 +228,8 @@ class _core():
         lold = lnew
         if verbose:
           print(f'Run is {(l-lold)/l:0.1%} complete.',end='\r')
-    #ray.shutdown()
+    if flag:
+      ray.shutdown()
     
     # Reshape outputs to 2D array
     oldouts = np.array(outs).reshape((len(outs),self.ny))
@@ -321,7 +323,7 @@ class _core():
       res = differential_evolution(fun,**kwargs)
     else:
       # Add buffer to nlcs to stop overshoot
-      buff = 1e-8
+      buff = 1e-6
       for i in nlcs:
         i.lb += buff
         i.ub -= buff
