@@ -13,7 +13,7 @@ import copy
 from sklearn.model_selection import train_test_split
 from functools import partial
 from scipy.optimize import minimize,differential_evolution,NonlinearConstraint,Bounds
-from andvaranaut.utils import _core,cdf
+from andvaranaut.utils import _core,cdf,save_object
 import ray
 from matplotlib import ticker
 
@@ -617,6 +617,13 @@ class GP(_surrogate):
     plt.bar([f'x[{i}]'for i in range(self.nx)],np.log(sens_gp))
     plt.ylabel('Relative log importance')
     plt.show()
+
+  def portable_save(self,fname):
+    pg = copy.deepcopy(self)
+    pg.target = None
+    pg.constraints = None
+    save_object(pg,fname)
+
 
 # Ray remote function wrap around surrogate prediction
 @ray.remote
