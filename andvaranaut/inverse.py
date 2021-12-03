@@ -31,7 +31,8 @@ class MAP(_core):
     self.y_obv = None
     self.y_noise = None
     self.obvs = None
-    self.x_opt = None
+    self.xopt = None
+    self.post = None
 
   # Set your experimental x and y with noise
   def set_observations(self,y,y_noise=None,x_exp=None):
@@ -101,6 +102,7 @@ class MAP(_core):
     res = self._core__opt(self.__negative_log_posterior,method,self.nx_model,opt_restarts,bounds=bnds)
     t1 = stopwatch()
     self.xopt = res.x
+    self.post = -res.fun
 
     print(f'Optimal model parameters are: {res.x}')
     print(f'Posterior is: {-res.fun:0.3f}')
@@ -236,6 +238,7 @@ class GPMAP(MAP,GP):
       resx[i] = self.xconrevs[i+self.nx_exp].con(res.x[i])
     self.xopt = res.x
     self.xcopt = resx
+    self.post = -res.fun
 
     print(f'Optimal model parameters are: {res.x}')
     print(f'Posterior is: {-res.fun:0.3f}')
