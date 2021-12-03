@@ -79,8 +79,8 @@ class MAP(_core):
     if len(xsamps) != self.obvs:
       raise Exception("Error: one or more function evaluations failed to return valid result.")
     res = -self.obvs*self.ny*0.5*np.log(2*np.pi)
-    res -= np.sum(np.log(self.y_noise))
-    res -= np.sum(0.5/np.power(self.y_noise,2)*np.power(fvals-self.y_obv,2))
+    res -= np.sum(np.log(np.sqrt(self.y_noise)))
+    res -= np.sum(0.5/self.y_noise*np.power(fvals-self.y_obv,2))
     return res
 
   # Log posterior method acting on specified model inputs
