@@ -418,6 +418,54 @@ class _core():
       points[:,i] += bnds.lb[i]
     return points
 
+  # Calculate first derivative with second order central differences
+  def __derivative(self,x,fun,idx,eps=1e-6):
+    
+    # Get shifted input arrays
+    xdown = copy.deepcopy(x)
+    xup = copy.deepcopy(x)
+    xdown[idx] -= eps
+    xup[idx] += eps
+
+    # Get function results
+    fdown = fun(xdown)
+    fup = fun(xup)
+
+    # Calculate derivative
+    res = (fup - fdown) / (2*eps)
+    return res
+
+  # Calculates gradient vector
+  def __grad(self,x,fun,eps=1e-6):
+    
+    lenx = len(x)
+    res = np.zeros(lenx)
+    for i in range(lenx):
+      res[i] = self.__derivative(x,fun,i,eps)
+    return res
+
+  # Calculate hessian matrix
+  def __hessian(self,x,fun,eps=1e-6):
+
+    # Compute matrix as jacobian of gradient vector
+    lenx = len(x)
+    res = np.zeros((lenx,lenx))
+    grad = partial(self.__grad,fun=fun,eps=eps)
+    for i in range(lenx):
+      res[:,i] = self.__derivative(x,grad,i,eps)
+    return res 
+
+    # Compute matrix as symmetric derivative of derivative
+    lenx = len(x)
+    res = np.zeros((lenx,lenx))
+    for i in range(lenx):
+      for j in range(i):
+        div = partial(self.__derivative,fun=fun,eps=eps,idx=i)
+        res[i,j] = self.__derivative(x,div,j,eps)
+        res[j,i] = res[i,j]
+    return res 
+
+
 # Function which wraps serial function for executing in parallel directories
 @ray.remote(max_retries=0)
 def _parallel_wrap(fun,inp,idx):

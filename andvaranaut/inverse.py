@@ -108,6 +108,17 @@ class MAP(_core):
     print(f'Posterior is: {-res.fun:0.3f}')
     print(f'Time taken: {t1-t0:0.1f} s')
 
+  def inv_hess(self,eps=1e-6):
+    if self.xopt is None:
+      raise Exception('Must have MAP result before calculating inverse hessian')
+
+    # Calculate Hessian and invert
+    hess = self._core__hessian(self.xopt,self.__negative_log_posterior,eps)
+    res = np.linalg.inv(hess)
+
+    return res
+
+
 # MAP class using a GP
 class GPMAP(MAP,GP):
   def __init__(self,nx_exp,nx_model,\
