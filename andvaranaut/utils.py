@@ -154,7 +154,7 @@ class normalise:
 
 # Core class which runs target function
 class _core():
-  def __init__(self,nx,ny,priors,target,parallel=False,nproc=1,constraints=None):
+  def __init__(self,nx,ny,priors,target,parallel=False,nproc=1,constraints=None,rundir=None):
     # Check inputs
     if (not isinstance(nx,int)) or (nx < 1):
       raise Exception('Error: must specify an integer number of input dimensions > 0') 
@@ -193,6 +193,9 @@ class _core():
     self.parallel = parallel # Whether to use parallelism wherever possible
     self.nproc = nproc # Number of processors to use if using parallelism
     self.constraints = constraints # List of constraint functions for sampler
+    self.rundir = 'runs'
+    if rundir is not None:
+      self.rundir = rundir
 
   # Method which takes function, and 2D array of inputs
   # Then runs in parallel for each set of inputs
@@ -203,7 +206,7 @@ class _core():
     if not ray.is_initialized():
       ray.init(num_cpus=self.nproc)
     l = len(inps)
-    all_ids = [_parallel_wrap.remote(self.target,inps[i],i) for i in range(l)]
+    all_ids = [_parallel_wrap.remote(self.target,self.rundir,inps[i],i) for i in range(l)]
 
     # Get ids as they complete or fail, give warning on fail
     outs = []; fails = np.empty(0,dtype=np.intc)
@@ -243,8 +246,8 @@ class _core():
     t0 = stopwatch()
     n_samples = len(xsamps)
     # Create directory for tasks
-    if not os.path.isdir('runs'):
-      os.mkdir('runs')
+    if not os.path.isdir(self.rundir):
+      os.mkdir(self.rundir)
     # Parallel execution using ray
     if self.parallel:
       ysamps,fails = self.__parallel_runs(xsamps,verbose)
@@ -254,7 +257,7 @@ class _core():
       ysamps = np.empty((0,self.ny))
       fails = np.empty(0,dtype=np.intc)
       for i in range(n_samples):
-        d = f'./runs/task{i}'
+        d = os.path.join(self.rundir, f'task{i}')
         os.system(f'mkdir {d}')
         os.chdir(d)
         # Keep track of fails but run rest of samples
@@ -468,8 +471,8 @@ class _core():
 
 # Function which wraps serial function for executing in parallel directories
 @ray.remote(max_retries=0)
-def _parallel_wrap(fun,inp,idx):
-  d = f'./runs/task{idx}'
+def _parallel_wrap(fun,rundir,inp,idx):
+  d = os.path.join(rundir, f'task{idx}')
   if not os.path.isdir(d):
     os.mkdir(d)
   os.chdir(d)
