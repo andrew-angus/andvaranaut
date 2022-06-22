@@ -258,7 +258,8 @@ class _core():
       fails = np.empty(0,dtype=np.intc)
       for i in range(n_samples):
         d = os.path.join(self.rundir, f'task{i}')
-        os.system(f'mkdir {d}')
+        if not os.path.isdir(d):
+          os.system(f'mkdir {d}')
         os.chdir(d)
         # Keep track of fails but run rest of samples
         try:
