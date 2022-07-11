@@ -484,9 +484,11 @@ class GP(_surrogate):
     
     y = self.__predict(self.m,xarg,return_var)
 
-    if revert:
+    if revert and not return_var:
       for i in range(self.ny):
         y[:,i] = self.yconrevs[i].rev(y[:,i])
+    elif revert:
+      raise Exception("Reversion of variance not implemented, set return_var = False")
 
     return y
 
