@@ -474,8 +474,21 @@ class GP(_surrogate):
     return m
 
   # Standard predict method which wraps the GPy predict and allows for parallelism
-  def predict(self,x,return_var=False):
-    return self.__predict(self.m,x,return_var)
+  def predict(self,x,return_var=False,convert=False,revert=False):
+    if convert:
+      xarg = np.zeros_like(x)
+      for i in range(self.nx):
+        xarg[:,i] = self.xconrevs[i].con(x[:,i])
+    else:
+      xarg = copy.deepcopy(x)
+    
+    y = self.__predict(self.m,xarg,return_var)
+
+    if revert:
+      for i in range(self.ny):
+        y[:,i] = self.yconrevs[i].rev(y[:,i])
+
+    return y
 
   # Private predict method with more flexibility to act on any provided GPy model
   def __predict(self,m,x,return_var=False):
