@@ -68,6 +68,9 @@ def cdf_con(x,dist):
 # Normalise by provided factor
 def normalise_con(y,fac):
   return y/fac
+# Normalise by provided mean and std deviation
+def meanstd_con(y,mean,std):
+  return (y-mean)/std
 
 ## Reversion functions
 
@@ -116,6 +119,9 @@ def cdf_rev(x,dist):
 # Revert standard normalisation
 def normalise_rev(y,fac):
   return y*fac
+# Revert by mean and std deviation
+def meanstd_rev(y,mean,std):
+  return y*std + mean
 
 # Define class wrappers for matching sets of conversions and reversions
 # Also allows a standard format for use in surrogates without worrying about function arguments
@@ -151,6 +157,10 @@ class normalise:
   def __init__(self,fac):
     self.con = partial(normalise_con,fac=fac)
     self.rev = partial(normalise_rev,fac=fac)
+class meanstd:
+  def __init__(self,mean,std):
+    self.con = partial(meanstd_con,mean=mean,std=std)
+    self.rev = partial(meanstd_rev,mean=mean,std=std)
 
 # Core class which runs target function
 class _core():
