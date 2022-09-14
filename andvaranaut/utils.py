@@ -51,6 +51,12 @@ def std_normal(x,dist):
 # Convert positive values to unbounded with logarithm
 def log_con(y):
   return np.log(y)
+# Convert positive values to unbounded with logarithm
+def log1p_con(y):
+  return np.log1p(y)
+# Convert positive values to unbounded with logarithm
+def log10_con(y):
+  return np.log10(y)
 # Convert non-negative to unbounded, via intermediate [0,1]
 def nonneg_con(y):
   y01 = y/(1+y)
@@ -100,8 +106,13 @@ def normal_rev(x,dist):
   return x
 # Revert logarithm with power
 def log_rev(y):
-  #return np.power(10,y)
   return np.exp(y)
+# Revert logarithm with power
+def log1p_rev(y):
+  return np.expm1(y)
+# Revert logarithm with power
+def log10_rev(y):
+  return np.power(10,y)
 # Revert unbounded to non-negative, via intermediate [0,1]
 def nonneg_rev(y):
   y01 = __logistic(y)
@@ -153,12 +164,22 @@ class logarithm:
   def __init__(self):
     self.con = log_con
     self.rev = log_rev
+class log1p:
+  def __init__(self):
+    self.con = log1p_con
+    self.rev = log1p_rev
+class log10:
+  def __init__(self):
+    self.con = log10_con
+    self.rev = log10_rev
 class normalise:
   def __init__(self,fac):
     self.con = partial(normalise_con,fac=fac)
     self.rev = partial(normalise_rev,fac=fac)
 class meanstd:
   def __init__(self,mean,std):
+    self.mean = mean
+    self.std = std
     self.con = partial(meanstd_con,mean=mean,std=std)
     self.rev = partial(meanstd_rev,mean=mean,std=std)
 
