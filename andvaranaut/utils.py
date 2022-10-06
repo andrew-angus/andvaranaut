@@ -85,8 +85,8 @@ def quantile_con(y,qt):
 def robust_con(y,rs):
   return rs.transform(y.reshape(-1,1))[:,0]
 # Revert by yeo-johnson transform
-def yeo_con(y,yj):
-  return yj.transform(y.reshape(-1,1))[:,0]
+def powerT_con(y,pt):
+  return pt.transform(y.reshape(-1,1))[:,0]
 
 ## Reversion functions
 
@@ -150,8 +150,8 @@ def quantile_rev(y,qt):
 def robust_rev(y,rs):
   return rs.inverse_transform(y.reshape(-1,1))[:,0]
 # Revert by yeo-johnson transform
-def yeo_rev(y,yj):
-  return yj.inverse_transform(y.reshape(-1,1))[:,0]
+def powerT_rev(y,pt):
+  return pt.inverse_transform(y.reshape(-1,1))[:,0]
 
 # Define class wrappers for matching sets of conversions and reversions
 # Also allows a standard format for use in surrogates without worrying about function arguments
@@ -232,10 +232,12 @@ class robust:
 class powerT:
   def __init__(self,x,method='yeo-johnson'):
     self.method = method
-    self.yj = PowerTransformer(method=method)
-    self.yj.fit(x.reshape(-1,1))
-    self.con = partial(yeo_con,yj=self.yj)
-    self.rev = partial(yeo_rev,yj=self.yj)
+    self.pt = PowerTransformer(method=method)
+    self.pt.fit(x.reshape(-1,1))
+    lamb = self.pt.lambdas_[0]
+    self.pt.lambdas_[0] = np.minimum(np.maximum(-0.01,lamb),1.0)
+    self.con = partial(powerT_con,pt=self.pt)
+    self.rev = partial(powerT_rev,pt=self.pt)
 
 
 
