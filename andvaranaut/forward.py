@@ -526,14 +526,22 @@ class GP(_surrogate):
 
   # Make train-test split and populate attributes
   def train_test(self,training_frac=0.9):
-    self.xtrain,self.xtest,self.ytrain,self.ytest = \
-      train_test_split(self.xc,self.yc,train_size=training_frac)
+    #self.xtrain,self.xtest,self.ytrain,self.ytest = \
+    #  train_test_split(self.xc,self.yc,train_size=training_frac)
+    indexes = np.arange(len(self.x))
+    self.train,self.test = \
+      train_test_split(indexes,train_size=training_frac)
 
   # Assess GP performance with several test plots and RMSE calcs
   def test_plots(self,restarts=10,revert=True,yplots=True,xplots=True,opt=True,normalise=True):
     # Creat train-test sets if none exist
-    if self.xtrain is None:
+    #if self.xtrain is None:
+    if self.train is None:
       self.train_test()
+    self.xtrain = self.xc[self.train,:]
+    self.xtest = self.xc[self.test,:]
+    self.ytrain = self.yc[self.train,:]
+    self.ytest = self.yc[self.test,:]
     # Train model on training set and make predictions on xtest data
     mtrain = self.__fit(self.xtrain,self.ytrain,restarts=restarts,opt=opt,normalise=False)
     if not opt and self.m is not None:
