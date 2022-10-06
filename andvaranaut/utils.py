@@ -12,6 +12,7 @@ import os
 import copy
 from scipy.optimize import differential_evolution,NonlinearConstraint,minimize
 from design import ihs
+from sklearn.preprocessing import QuantileTransformer, RobustScaler, PowerTransformer
 
 # Save and load with pickle
 # ToDo: Faster with cpickle 
@@ -77,6 +78,15 @@ def normalise_con(y,fac):
 # Normalise by provided mean and std deviation
 def meanstd_con(y,mean,std):
   return (y-mean)/std
+# Convert by quantiles
+def quantile_con(y,qt):
+  return qt.transform(y.reshape(-1,1))[:,0]
+# Revert by interquartile range
+def robust_con(y,rs):
+  return rs.transform(y.reshape(-1,1))[:,0]
+# Revert by yeo-johnson transform
+def yeo_con(y,yj):
+  return yj.transform(y.reshape(-1,1))[:,0]
 
 ## Reversion functions
 
@@ -133,6 +143,15 @@ def normalise_rev(y,fac):
 # Revert by mean and std deviation
 def meanstd_rev(y,mean,std):
   return y*std + mean
+# Revert by quantiles
+def quantile_rev(y,qt):
+  return qt.inverse_transform(y.reshape(-1,1))[:,0]
+# Revert by interquartile range
+def robust_rev(y,rs):
+  return rs.inverse_transform(y.reshape(-1,1))[:,0]
+# Revert by yeo-johnson transform
+def yeo_rev(y,yj):
+  return yj.inverse_transform(y.reshape(-1,1))[:,0]
 
 # Define class wrappers for matching sets of conversions and reversions
 # Also allows a standard format for use in surrogates without worrying about function arguments
@@ -177,11 +196,48 @@ class normalise:
     self.con = partial(normalise_con,fac=fac)
     self.rev = partial(normalise_rev,fac=fac)
 class meanstd:
-  def __init__(self,mean,std):
-    self.mean = mean
-    self.std = std
-    self.con = partial(meanstd_con,mean=mean,std=std)
-    self.rev = partial(meanstd_rev,mean=mean,std=std)
+  def __init__(self,x):
+    self.mean = np.mean(x)
+    self.std = np.std(x)
+    self.con = partial(meanstd_con,mean=self.mean,std=self.std)
+    self.rev = partial(meanstd_rev,mean=self.mean,std=self.std)
+class minmax:
+  def __init__(self,x,centred=False):
+    self.centred = centred
+    self.min = np.min(x)
+    self.max = np.max(x)
+  def con(self,x):
+    if self.centred:
+      return (2*x - (self.max+self.min))/(self.max-self.min)
+    else:
+      return (x - self.min)/(self.max-self.min)
+  def rev(self,x):
+    if self.centred:
+      return (x*(self.max-self.min)+(self.max+self.min))/2
+    else:
+      return x*(self.max-self.min)+self.min
+class quantile:
+  def __init__(self,x,mode='normal'):
+    self.mode = mode
+    self.qt = QuantileTransformer(output_distribution=mode)
+    self.qt.fit(x.reshape(-1,1))
+    self.con = partial(quantile_con,qt=self.qt)
+    self.rev = partial(quantile_rev,qt=self.qt)
+class robust:
+  def __init__(self,x):
+    self.rs = RobustScaler()
+    self.rs.fit(x.reshape(-1,1))
+    self.con = partial(robust_con,rs=self.rs)
+    self.rev = partial(robust_rev,rs=self.rs)
+class powerT:
+  def __init__(self,x,method='yeo-johnson'):
+    self.method = method
+    self.yj = PowerTransformer(method=method)
+    self.yj.fit(x.reshape(-1,1))
+    self.con = partial(yeo_con,yj=self.yj)
+    self.rev = partial(yeo_rev,yj=self.yj)
+
+
 
 # Core class which runs target function
 class _core():
