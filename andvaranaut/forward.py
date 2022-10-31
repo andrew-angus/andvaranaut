@@ -42,7 +42,7 @@ class LHC(_core):
   def __latin_sample(self,nsamps,seed=None,improved=True):
     if improved:
       points = ihs(nsamps,self.nx,seed)
-      points = points/nsamps
+      points = (points-1)/(nsamps-1)
       # Shift points from borders
       points = np.where(points < 1e-10,1e-10,points)
       points = np.where(points > 1-1e-10,1-1e-10,points)
