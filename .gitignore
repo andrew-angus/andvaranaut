@@ -6,3 +6,4 @@ notebook.log
 .ipynb_checkpoints
 parallel
 *.pickle
+*.log
