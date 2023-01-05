@@ -543,11 +543,16 @@ class GP(_surrogate):
     self.ytrain = self.yc[self.train,:]
     self.ytest = self.yc[self.test,:]
     # Train model on training set and make predictions on xtest data
-    mtrain = self.__fit(self.xtrain,self.ytrain,restarts=restarts,opt=opt,normalise=False)
-    if not opt and self.m is not None:
-      mtrain.kern.lengthscale = self.m.kern.lengthscale
-      mtrain.kern.variance = self.m.kern.variance
-      mtrain.Gaussian_noise.variance = self.m.Gaussian_noise.variance
+    if self.m is None:
+      mtrain = self.__fit(self.xtrain,self.ytrain,restarts=restarts,opt=opt,normalise=normalise)
+    else:
+      mtrain = copy.deepcopy(self.m)
+      mtrain.set_XY(self.xtrain,self.ytrain)
+      if opt:
+        mtrain.optimize_restarts(restarts,robust=True)
+        #mtrain.kern.lengthscale = self.m.kern.lengthscale
+        #mtrain.kern.variance = self.m.kern.variance
+        #mtrain.Gaussian_noise.variance = self.m.Gaussian_noise.variance
     #ypred,ypred_var = mtrain.predict(self.xtest)
     ypred = self.__predict(mtrain,self.xtest,return_var=False)
     # Either revert data to original for comparison or leave as is
