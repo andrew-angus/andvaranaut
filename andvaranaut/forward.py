@@ -27,8 +27,9 @@ class LHC(_core):
   # Add n samples to current via latin hypercube sampling
   def sample(self,nsamps,seed=None,improved=True):
     if not isinstance(nsamps,int) or (nsamps < 1):
-      raise Exception("Error: nsamps argument must be an integer > 0")
-    print(f'Evaluating {nsamps} latin hypercube samples...')
+      raise Exception("Error: nsamps argument must be an integer > 0") 
+    if self.verbose:
+      print(f'Evaluating {nsamps} latin hypercube samples...')
     xsamps = self.__latin_sample(nsamps,seed,improved)
     if self.constraints is not None:
       xsamps = self._core__check_constraints(xsamps)
@@ -275,17 +276,20 @@ class GP(_surrogate):
   def __adaptive_sample(self,nsamps,batchsize,restarts,opt_method,opt_restarts,normalise):
     # Determine number of batches and new samples in each batch
     batches = round(float(np.ceil(nsamps/batchsize)))
+    if self.verbose:
+      print(f'Sampling {batches} batches of size {batchsize}...')
+    t0 = stopwatch()
     for i in range(batches):
       newsamps = np.minimum(nsamps-i*batchsize,batchsize)
 
       # Fit GP to current samples
+      verbose = self.verbose
+      self.verbose = False
       self.fit(restarts,normalise=normalise)
 
       # Keep hyperparameters and evaluate ESE_loo for each data point
       csamps = len(self.x)
       eseloo = np.zeros((csamps,self.ny))
-      print('Calculating ESE_loo...')
-      t0 = stopwatch()
       for j in range(csamps):
 
         # Delete single sample
@@ -316,13 +320,8 @@ class GP(_surrogate):
           Eloo = yv + yse
           Varloo = 2*yv**2 + 4*yv*yse
           eseloo[j,k] = Eloo/np.sqrt(Varloo)
-        print(f'{(j+1)/csamps:0.1%} complete.',end='\r')
-      t1 = stopwatch()
-      print(f'Time taken: {t1-t0:0.2f} s')
-
       
       # Fit auxillary GP to ESE_loo
-      print('Fitting auxillary GP to ESE_loo data...')
       xconrevs = [cdf(self.priors[j]) for j in range(self.nx)]
       yconrevs = [_none_conrev() for j in range(self.ny)]
       gpaux = GP(kernel='RBF',noise=False,nx=self.nx,ny=self.ny,\
@@ -332,7 +331,8 @@ class GP(_surrogate):
                  target=self.target,constraints=copy.deepcopy(self.constraints))
       gpaux.set_data(self.x,eseloo-np.sqrt(0.5))
       gpaux.m = gpaux._GP__fit(gpaux.xc,gpaux.yc,restarts=restarts,minl=True,normalise=False)
-      print(gpaux.m[''])
+      #if self.verbose:
+        #print(gpaux.m[''])
 
       # Create repulsive function dataset
       gpaux._xRF = copy.deepcopy(gpaux.xc)
@@ -342,41 +342,47 @@ class GP(_surrogate):
       # Set bounds and constraints
       bnd = 1-1e-10
       bnds = Bounds([1-bnd for j in range(self.nx)],[bnd for j in range(self.nx)])
-      print(bnds)
+      #if self.verbose:
+        #print(bnds)
       kwargs = {'bounds':bnds}
       if self.constraints is not None:
         gpaux.constraints['constraints'] = [partial(gpaux._GP__cconstraint,constraint=j) \
             for j in self.constraints['constraints']]
       if opt_method =='DE':
         kwargs['polish'] = False
-      print('Getting batch of samples...')
-      t0 = stopwatch()
+      self.verbose = verbose
       for j in range(newsamps):
         # Maximise PEI to get next sample then add to RF data
         res = gpaux._core__opt(gpaux._GP__negative_PEI,opt_method,gpaux.nx,opt_restarts,**kwargs)
-        print(res.x)
+        if self.verbose:
+          print('Sample:',res.x)
         x1 = np.expand_dims(res.x,axis=0)
         # Add multiple copies of this to batch to avoid clustering
         for k in range(10):
           gpaux._xRF = np.r_[gpaux._xRF,x1]
         xsamps[j] = res.x
-        print(f'{(j+1)/newsamps:0.1%} complete.',end='\r')
-      t1 = stopwatch()
-      print(f'Time taken: {t1-t0:0.2f} s')
-      plt.scatter(gpaux.xc[:,0],gpaux.xc[:,1])
-      plt.scatter(xsamps[:,0],xsamps[:,1])
-      plt.xlim(0,1)
-      plt.ylim(0,1)
-      plt.show()
+      
+      self.verbose = verbose
+      #plt.scatter(gpaux.xc[:,0],gpaux.xc[:,1])
+      #plt.scatter(xsamps[:,0],xsamps[:,1])
+      #plt.xlim(0,1)
+      #plt.ylim(0,1)
+      #plt.show()
 
       # Evaluate function at sample points and add to database
-      print("Evaluating function at sample points")
       for j in range(self.nx):
         xsamps[:,j] = gpaux.xconrevs[j].rev(xsamps[:,j])
+      self.verbose=False
       xsamps,ysamps = self._core__vector_solver(xsamps)
+      self.verbose = verbose
       self.x = np.r_[self.x,xsamps]
       self.y = np.r_[self.y,ysamps]
       self._surrogate__con(newsamps)
+      if self.verbose:
+        print(f'{(i+1)/batches:0.1%} complete.',end='\r')
+    t1 = stopwatch()
+    if self.verbose:
+      print(f'Time taken: {t1-t0:0.2f} s')
 
   # Wrapper of constraint function which operates on converted inputs for adaptive sampling opt
   def __cconstraint(self,xc,constraint):
@@ -467,10 +473,13 @@ class GP(_surrogate):
         maxrscaled = self.__K_of_r_root()
         minl = 1.0/maxrscaled
         m.kern.lengthscale.constrain_bounded(minl,1e6,warning=False)
-      print('Optimizing hyperparameters...')
-      m.optimize_restarts(restarts,parallel=self.parallel,num_processes=self.nproc,robust=True)
+      if self.verbose:
+        print('Optimizing hyperparameters...')
+      m.optimize_restarts(restarts,parallel=self.parallel,\
+          num_processes=self.nproc,robust=True,verbose=self.verbose)
       t1 = stopwatch()
-      print(f'Time taken: {t1-t0:0.2f} s')
+      if self.verbose:
+        print(f'Time taken: {t1-t0:0.2f} s')
     return m
 
   # Standard predict method which wraps the GPy predict and allows for parallelism
@@ -494,7 +503,8 @@ class GP(_surrogate):
 
   # Private predict method with more flexibility to act on any provided GPy model
   def __predict(self,m,x,return_var=False):
-    print('Predicting...')
+    if self.verbose:
+      print('Predicting...')
     t0 = stopwatch()
     if self.parallel:
       # Break x values into maximal sized chunks and use ray parallelism
@@ -518,7 +528,8 @@ class GP(_surrogate):
     else:
       ypreds,yvarpreds = m.predict(x)
     t1 = stopwatch()
-    print(f'Time taken: {t1-t0:0.2f} s')
+    if self.verbose:
+      print(f'Time taken: {t1-t0:0.2f} s')
     if return_var:
       return ypreds,yvarpreds
     else:
@@ -549,7 +560,7 @@ class GP(_surrogate):
       mtrain = copy.deepcopy(self.m)
       mtrain.set_XY(self.xtrain,self.ytrain)
       if opt:
-        mtrain.optimize_restarts(restarts,robust=True)
+        mtrain.optimize_restarts(restarts,robust=True,verbose=self.verbose)
         #mtrain.kern.lengthscale = self.m.kern.lengthscale
         #mtrain.kern.variance = self.m.kern.variance
         #mtrain.Gaussian_noise.variance = self.m.Gaussian_noise.variance
@@ -568,10 +579,11 @@ class GP(_surrogate):
       xtest = self.xtest
       ytest = self.ytest
     # RMSE for each y variable
-    print()
+    #print('')
     for i in range(self.ny):
       rmse = np.sqrt(np.sum((ypred[:,i]-ytest[:,i])**2)/len(ytest[:,i]))
-      print(f'RMSE for y[{i}] is: {rmse}')
+      if self.verbose:
+        print(f'RMSE for y[{i}] is: {rmse}')
     # Compare ytest and predictions for each output variable
     if yplots:
       for i in range(self.ny):

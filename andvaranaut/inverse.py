@@ -76,7 +76,7 @@ class MAP(_core):
   # Gaussian log likelihood method acting on specified model inputs
   def log_likelihood(self,x):
     self.x_obv[:,self.nx_exp:] = x
-    xsamps,fvals = self._core__vector_solver(self.x_obv,verbose=False)
+    xsamps,fvals = self._core__vector_solver(self.x_obv)
     if len(xsamps) != self.obvs:
       raise Exception("Error: one or more function evaluations failed to return valid result.")
     res = -self.obvs*self.ny*0.5*np.log(2*np.pi)
@@ -96,17 +96,19 @@ class MAP(_core):
     # Bounds which try and avoid extrapolation
     bnd = 0.999999999999999
     bnds = tuple(self.priors[i+self.nx_exp].interval(bnd) for i in range(self.nx_model))
-    print("Finding optimal inputs by maximising posterior. Bounds on x are:")
-    print(bnds)
+    if self.verbose:
+      print("Finding optimal inputs by maximising posterior. Bounds on x are:")
+      print(bnds)
     t0 = stopwatch()
     res = self._core__opt(self.__negative_log_posterior,method,self.nx_model,opt_restarts,bounds=bnds)
     t1 = stopwatch()
     self.xopt = res.x
     self.post = -res.fun
 
-    print(f'Optimal model parameters are: {res.x}')
-    print(f'Posterior is: {-res.fun:0.3f}')
-    print(f'Time taken: {t1-t0:0.1f} s')
+    if self.verbose:
+      print(f'Optimal model parameters are: {res.x}')
+      print(f'Posterior is: {-res.fun:0.3f}')
+      print(f'Time taken: {t1-t0:0.1f} s')
 
   def inv_hess(self,eps=1e-6):
     if self.xopt is None:
@@ -148,7 +150,8 @@ class GPMAP(MAP,GP):
       raise Exception("Error: nx_exp and nx_model must sum to gp.nx")
     if (self.ny != gp.ny):
       raise Exception("Error: self.ny does not match gp.ny")
-    print("Warning: Setting GP overwrites GPMAP init arguments. Ensure priors etc. are correct.")
+    if self.verbose:
+      print("Warning: Setting GP overwrites GPMAP init arguments. Ensure priors etc. are correct.")
     # Extract attributes
     self.priors = gp.priors
     self.target = gp.target
@@ -236,11 +239,12 @@ class GPMAP(MAP,GP):
     # Bounds which try and avoid extrapolation
     # Also avoid calculating conversion derivative at bounds
     maxbnds = [i.interval(1-1e-3) for i in self.priors]
-    print(maxbnds)
+    #print(maxbnds)
     bnds = tuple((np.maximum(np.min(self.x[:,j]),maxbnds[j][0]),np.minimum(np.max(self.x[:,j]),maxbnds[j][1])) \
         for j in range(self.nx_exp,self.nx))
-    print("Finding optimal model inputs by maximising posterior. Bounds on x are:")
-    print(bnds)
+    if self.verbose:
+      print("Finding optimal model inputs by maximising posterior. Bounds on x are:")
+      print(bnds)
     t0 = stopwatch()
     res = self._core__opt(self.__negative_rev_log_posterior,method,self.nx_model,opt_restarts,bounds=bnds)
     t1 = stopwatch()
@@ -251,9 +255,10 @@ class GPMAP(MAP,GP):
     self.xcopt = resx
     self.post = -res.fun
 
-    print(f'Optimal model parameters are: {res.x}')
-    print(f'Posterior is: {-res.fun:0.3f}')
-    print(f'Time taken: {t1-t0:0.1f} s')
+    if self.verbose:
+      print(f'Optimal model parameters are: {res.x}')
+      print(f'Posterior is: {-res.fun:0.3f}')
+      print(f'Time taken: {t1-t0:0.1f} s')
 
 # MCMC class inheriting from MAP
 class MCMC(MAP):

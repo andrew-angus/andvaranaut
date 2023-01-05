@@ -243,7 +243,8 @@ class powerT:
 
 # Core class which runs target function
 class _core():
-  def __init__(self,nx,ny,priors,target,parallel=False,nproc=1,constraints=None,rundir=None):
+  def __init__(self,nx,ny,priors,target,parallel=False,nproc=1,\
+      constraints=None,rundir=None,verbose=False):
     # Check inputs
     if (not isinstance(nx,int)) or (nx < 1):
       raise Exception('Error: must specify an integer number of input dimensions > 0') 
@@ -282,6 +283,7 @@ class _core():
     self.parallel = parallel # Whether to use parallelism wherever possible
     self.nproc = nproc # Number of processors to use if using parallelism
     self.constraints = constraints # List of constraint functions for sampler
+    self.verbose = verbose
     self.rundir = 'runs'
     if rundir is not None:
       self.rundir = rundir
@@ -289,7 +291,7 @@ class _core():
   # Method which takes function, and 2D array of inputs
   # Then runs in parallel for each set of inputs
   # Returning 2D array of outputs
-  def __parallel_runs(self,inps,verbose):
+  def __parallel_runs(self,inps):
 
     # Run function in parallel in individual directories    
     if not ray.is_initialized():
@@ -318,7 +320,7 @@ class _core():
       lnew = len(ids)
       if lnew != lold:
         lold = lnew
-        if verbose:
+        if self.verbose:
           print(f'Run is {(l-lold)/l:0.1%} complete.',end='\r')
     if flag:
       ray.shutdown()
@@ -331,7 +333,7 @@ class _core():
     return outs, fails
 
   # Private method which takes array of x samples and evaluates y at each
-  def __vector_solver(self,xsamps,verbose=True):
+  def __vector_solver(self,xsamps):
     t0 = stopwatch()
     n_samples = len(xsamps)
     # Create directory for tasks
@@ -339,7 +341,7 @@ class _core():
       os.mkdir(self.rundir)
     # Parallel execution using ray
     if self.parallel:
-      ysamps,fails = self.__parallel_runs(xsamps,verbose)
+      ysamps,fails = self.__parallel_runs(xsamps)
       assert ysamps.shape[1] == self.ny, "Specified ny does not match function output"
     # Serial execution
     else:
@@ -370,7 +372,7 @@ class _core():
           os.chdir('../..')
           raise Exception("Error: number of target function outputs is not equal to ny")
         os.chdir('../..')
-        if verbose:
+        if self.verbose:
           print(f'Run is {(i+1)/n_samples:0.1%} complete.',end='\r')
     t1 = stopwatch()
 
@@ -393,7 +395,7 @@ class _core():
     ysamps = ysamps[mask]
 
     # Final print on time taken
-    if verbose:
+    if self.verbose:
       print()
       print(f'Time taken: {t1-t0:0.2f} s')
 
@@ -412,6 +414,8 @@ class _core():
       nlcs = tuple()
     kwargs['constraints'] = nlcs
     # Global opt method choice
+    verbose = self.verbose
+    self.verbose = False
     if method == 'DE':
       res = differential_evolution(fun,**kwargs)
     else:
@@ -463,7 +467,9 @@ class _core():
       if not any(f_success):
         print('Warning: All minimizations unsuccesful')
       elif not all(f_success):
-        print('Removing failed minimizations...')
+        self.verbose = verbose
+        if self.verbose:
+          print('Removing failed minimizations...')
         f_vals = f_vals[f_success]
         idx = np.arange(len(results))
         idx = idx[f_success]
@@ -472,6 +478,7 @@ class _core():
       best = np.argmin(f_vals)
       res = results[best]
 
+    self.verbose = verbose
     return res
 
   # Check proposed samples against all provided constraints
