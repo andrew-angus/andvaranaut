@@ -3,7 +3,7 @@
 from andvaranaut.utils import _core
 from andvaranaut.forward import GP
 import numpy as np
-from scipy.optimize import differential_evolution
+from scipy.optimize import differential_evolution, Bounds
 import scipy.stats as st
 import copy
 import GPy
@@ -235,18 +235,17 @@ class GPMAP(MAP,GP):
     return pc
 
   # Change opt method to use GP data bounds and reversion of optimised x values
-  def opt(self,method='DE',opt_restarts=10):
+  def opt(self,method='DE',opt_restarts=10,runs=1):
     # Bounds which try and avoid extrapolation
     # Also avoid calculating conversion derivative at bounds
     maxbnds = [i.interval(1-1e-3) for i in self.priors]
-    #print(maxbnds)
-    bnds = tuple((np.maximum(np.min(self.x[:,j]),maxbnds[j][0]),np.minimum(np.max(self.x[:,j]),maxbnds[j][1])) \
-        for j in range(self.nx_exp,self.nx))
-    if self.verbose:
-      print("Finding optimal model inputs by maximising posterior. Bounds on x are:")
-      print(bnds)
+    bnds = Bounds([np.maximum(np.min(self.x[:,j]),maxbnds[j][0]) \
+        for j in range(self.nx_exp,self.nx)],\
+        [np.minimum(np.max(self.x[:,j]),maxbnds[j][1]) \
+        for j in range(self.nx_exp,self.nx)])
     t0 = stopwatch()
-    res = self._core__opt(self.__negative_rev_log_posterior,method,self.nx_model,opt_restarts,bounds=bnds)
+    res = self._core__opt(self.__negative_rev_log_posterior,method,\
+        self.nx_model,opt_restarts,bounds=bnds)
     t1 = stopwatch()
     resx = np.zeros(self.nx_model)
     for i in range(self.nx_model):
