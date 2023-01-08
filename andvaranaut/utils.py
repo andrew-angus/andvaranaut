@@ -425,7 +425,8 @@ class _core():
         i.lb += buff
         i.ub -= buff
       # Draw starting point samples
-      points = ihs(restarts,nx)/restarts
+      points = (ihs(restarts,nx)\
+          -1.0+np.random.rand(restarts,nx))/restarts
       # Scale by bounds
       bnds = kwargs['bounds']
       points = self.__bounds_scale(points,nx,bnds)

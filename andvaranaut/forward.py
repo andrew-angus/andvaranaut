@@ -42,11 +42,10 @@ class LHC(_core):
   # Produce latin hypercube samples from input distributions
   def __latin_sample(self,nsamps,seed=None,improved=True):
     if improved:
-      points = ihs(nsamps,self.nx,seed)
-      points = (points-1)/(nsamps-1)
-      # Shift points from borders
-      points = np.where(points < 1e-10,1e-10,points)
-      points = np.where(points > 1-1e-10,1-1e-10,points)
+      if seed:
+        np.random.seed(seed)
+      points = (ihs(nsamps,self.nx,seed)\
+          -1.0+np.random.rand(nsamps,self.nx))/nsamps
     else:
       points = latin_random(nsamps,self.nx,seed)
     xsamps = np.zeros_like(points)
@@ -340,8 +339,8 @@ class GP(_surrogate):
       # Get sample batch
       xsamps = np.zeros((newsamps,self.nx))
       # Set bounds and constraints
-      bnd = 1-1e-10
-      bnds = Bounds([1-bnd for j in range(self.nx)],[bnd for j in range(self.nx)])
+      bnd = 1e-10
+      bnds = Bounds([bnd for j in range(self.nx)],[1-bnd for j in range(self.nx)])
       #if self.verbose:
         #print(bnds)
       kwargs = {'bounds':bnds}
@@ -354,8 +353,6 @@ class GP(_surrogate):
       for j in range(newsamps):
         # Maximise PEI to get next sample then add to RF data
         res = gpaux._core__opt(gpaux._GP__negative_PEI,opt_method,gpaux.nx,opt_restarts,**kwargs)
-        if self.verbose:
-          print('Sample:',res.x)
         x1 = np.expand_dims(res.x,axis=0)
         # Add multiple copies of this to batch to avoid clustering
         for k in range(10):
@@ -379,6 +376,7 @@ class GP(_surrogate):
       self.y = np.r_[self.y,ysamps]
       self._surrogate__con(newsamps)
       if self.verbose:
+        print('Sample:',xsamps)
         print(f'{(i+1)/batches:0.1%} complete.',end='\r')
     t1 = stopwatch()
     if self.verbose:
