@@ -245,9 +245,9 @@ class _none_conrev:
 
 # Inherit from surrogate class and add GP specific methods
 class GP(_surrogate):
-  def __init__(self,kernel='RBF',noise=True,**kwargs):
+  def __init__(self,kernel='RBF',noise=True,normalise=True,**kwargs):
     super().__init__(**kwargs)
-    self.change_model(kernel,noise)
+    self.change_model(kernel,noise,normalise)
     self.__scrub_train_test()
     self._xRF = None
 
@@ -258,7 +258,7 @@ class GP(_surrogate):
     self.ytest = None
 
   # Sample method inherits lhc sampling and adds adaptive sampling option
-  def sample(self,nsamps,method='lhc',batchsize=1,restarts=10,seed=None,opt_method='DE',opt_restarts=10,normalise=True):
+  def sample(self,nsamps,method='lhc',batchsize=1,restarts=10,seed=None,opt_method='DE',opt_restarts=10):
     methods = ['lhc','adaptive']
     if method not in methods:
       raise Exception(f'Error: method must be one of {methods}')
@@ -267,12 +267,12 @@ class GP(_surrogate):
     else:
       if self.x.shape[0] < 2:
         raise Exception("Error: require at least 2 LHC samples to perform adaptive sampling.")
-      self.__adaptive_sample(nsamps,batchsize,restarts,opt_method,opt_restarts,normalise)
+      self.__adaptive_sample(nsamps,batchsize,restarts,opt_method,opt_restarts)
 
   # Adaptive sampler based on Mohammadi, Hossein, et al. 
   # "Cross-validation based adaptive sampling for Gaussian process models." 
   # arXiv preprint arXiv:2005.01814 (2020).
-  def __adaptive_sample(self,nsamps,batchsize,restarts,opt_method,opt_restarts,normalise):
+  def __adaptive_sample(self,nsamps,batchsize,restarts,opt_method,opt_restarts):
     # Determine number of batches and new samples in each batch
     batches = round(float(np.ceil(nsamps/batchsize)))
     if self.verbose:
@@ -284,7 +284,7 @@ class GP(_surrogate):
       # Fit GP to current samples
       verbose = self.verbose
       self.verbose = False
-      self.fit(restarts,normalise=normalise)
+      self.fit(restarts)
 
       # Keep hyperparameters and evaluate ESE_loo for each data point
       csamps = len(self.x)
@@ -296,7 +296,7 @@ class GP(_surrogate):
         y_loo = np.delete(self.yc,j,axis=0)
 
         # Fit GP using saved hyperparams
-        mloo = self.__fit(x_loo,y_loo,restarts=restarts,opt=False,normalise=normalise)
+        mloo = self.__fit(x_loo,y_loo,restarts=restarts,opt=False)
         mloo.kern.variance = self.m.kern.variance
         mloo.kern.lengthscale = self.m.kern.lengthscale
         if self.noise:
@@ -325,11 +325,11 @@ class GP(_surrogate):
       yconrevs = [_none_conrev() for j in range(self.ny)]
       gpaux = GP(kernel='RBF',noise=False,nx=self.nx,ny=self.ny,\
                  xconrevs=xconrevs,yconrevs=yconrevs,\
-                 parallel=self.parallel,\
+                 normalise=False,parallel=self.parallel,\
                  nproc=self.nproc,priors=self.priors,\
                  target=self.target,constraints=copy.deepcopy(self.constraints))
       gpaux.set_data(self.x,eseloo-np.sqrt(0.5))
-      gpaux.m = gpaux._GP__fit(gpaux.xc,gpaux.yc,restarts=restarts,minl=True,normalise=False)
+      gpaux.m = gpaux._GP__fit(gpaux.xc,gpaux.yc,restarts=restarts,minl=True)
       #if self.verbose:
         #print(gpaux.m[''])
 
@@ -449,21 +449,21 @@ class GP(_surrogate):
     self.__scrub_train_test()
 
   # Fit GP standard method
-  def fit(self,restarts=10,normalise=True):
-    self.m = self.__fit(self.xc,self.yc,restarts,normalise=normalise)
+  def fit(self,restarts=10):
+    self.m = self.__fit(self.xc,self.yc,restarts)
 
   # More flexible private fit method which can use unconverted or train-test datasets
-  def __fit(self,x,y,restarts=10,opt=True,minl=False,normalise=True):
+  def __fit(self,x,y,restarts=10,opt=True,minl=False):
     # Get correct GPy kernel
     kstring = 'GPy.kern.'+self.kernel+'(input_dim=self.nx,variance=1.,lengthscale=1.,ARD=True)'
     kern = eval(kstring)
     # Fit and return model
     if not self.noise:
       meps = np.finfo(np.float64).eps
-      m = GPy.models.GPRegression(x,y,kern,noise_var=meps,normalizer=normalise)
+      m = GPy.models.GPRegression(x,y,kern,noise_var=meps,normalizer=self.normalise)
       m.likelihood.fix()
     else:
-      m = GPy.models.GPRegression(x,y,kern,noise_var=1.0,normalizer=normalise)
+      m = GPy.models.GPRegression(x,y,kern,noise_var=1.0,normalizer=self.normalise)
     if opt:
       t0 = stopwatch()
       if minl:
@@ -542,7 +542,7 @@ class GP(_surrogate):
       train_test_split(indexes,train_size=training_frac)
 
   # Assess GP performance with several test plots and RMSE calcs
-  def test_plots(self,restarts=10,revert=True,yplots=True,xplots=True,opt=True,normalise=True):
+  def test_plots(self,restarts=10,revert=True,yplots=True,xplots=True,opt=True):
     # Creat train-test sets if none exist
     #if self.xtrain is None:
     if self.train is None:
@@ -553,7 +553,7 @@ class GP(_surrogate):
     self.ytest = self.yc[self.test,:]
     # Train model on training set and make predictions on xtest data
     if self.m is None:
-      mtrain = self.__fit(self.xtrain,self.ytrain,restarts=restarts,opt=opt,normalise=normalise)
+      mtrain = self.__fit(self.xtrain,self.ytrain,restarts=restarts,opt=opt)
     else:
       mtrain = copy.deepcopy(self.m)
       mtrain.set_XY(self.xtrain,self.ytrain)
@@ -607,7 +607,7 @@ class GP(_surrogate):
           plt.show()
 
   # Method to change noise/kernel attributes, scrubs any saved model
-  def change_model(self,kernel,noise):
+  def change_model(self,kernel,noise,normalise):
     kerns = ['RBF','Matern52','Matern32','Exponential']
     if kernel not in kerns:
       raise Exception(f"Error: kernel must be one of {kerns}")
@@ -615,6 +615,7 @@ class GP(_surrogate):
       raise Exception(f"Error: noise must be of type bool")
     self.kernel = kernel
     self.noise = noise
+    self.normalise = normalise
     self.m = None
 
   # Inherit set_data method and scrub train-test sets

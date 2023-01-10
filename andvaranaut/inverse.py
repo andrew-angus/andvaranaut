@@ -205,7 +205,7 @@ class GPMAP(MAP,GP):
     kstring = 'GPy.kern.'+self.kernel+'(input_dim=self.nx,variance=1.,lengthscale=1.,ARD=True)'
     kern = eval(kstring)
     #m = GPy.models.GPHeteroscedasticRegression(xc,yc,kern)
-    m = GPy.models.GPRegression(xc,yc,kern,normalizer=True)
+    m = GPy.models.GPRegression(xc,yc,kern,normalizer=self.normalise)
     #m.optimize_restarts(3)
     m.kern.lengthscale = self.m.kern.lengthscale
     m.kern.variance = self.m.kern.variance
