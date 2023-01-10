@@ -96,9 +96,6 @@ class MAP(_core):
     # Bounds which try and avoid extrapolation
     bnd = 0.999999999999999
     bnds = tuple(self.priors[i+self.nx_exp].interval(bnd) for i in range(self.nx_model))
-    if self.verbose:
-      print("Finding optimal inputs by maximising posterior. Bounds on x are:")
-      print(bnds)
     t0 = stopwatch()
     res = self._core__opt(self.__negative_log_posterior,method,self.nx_model,opt_restarts,bounds=bnds)
     t1 = stopwatch()
@@ -138,7 +135,7 @@ class GPMAP(MAP,GP):
     # Initialise new attributes
     self.yc_obv = None
     self.xc_obv = None
-    self.yc_noise = None
+    #self.yc_noise = None
     self.xcopt = None
 
   # Allow for setting attributes with existing GP class from andvaranaut.forward
@@ -175,27 +172,15 @@ class GPMAP(MAP,GP):
       self.set_observations(self.y_obv,self.y_noise,self.x_obv[:,:self.nx_exp])
 
   # Extend parent method to include data conversion/reversion
-  def set_observations(self,y,y_noise=None,x_exp=None):
-    super().set_observations(y,y_noise,x_exp)
+  def set_observations(self,y,x_exp=None):
+    super().set_observations(y,None,x_exp)
     self.yc_obv = copy.deepcopy(self.y_obv)
     self.xc_obv = copy.deepcopy(self.x_obv)
-    self.yc_noise = copy.deepcopy(self.y_noise)
+    #self.yc_noise = copy.deepcopy(self.y_noise)
     for i in range(self.nx_exp):
       self.xc_obv[:,i] = self.xconrevs[i].con(self.x_obv[:,i])
     for i in range(self.ny):
       self.yc_obv[:,i] = self.yconrevs[i].con(self.y_obv[:,i])
-    # Non-linear transformations will invalidate std_dev so take average of conversion deviation
-    for i in range(self.ny):
-      for j in range(len(self.yc_noise)):
-        self.yc_noise[j,i] = np.mean(np.array([self.yconrevs[i].con(\
-         np.sqrt(self.y_noise[j,i])+self.y_obv[j,i]),self.yconrevs[i].con(\
-          np.sqrt(self.y_noise[j,i])-self.y_obv[j,i])]))**2
-
-    # Also flatten second noise dimension via averaging\
-    # for compatibility with GPy heteroscedastic regression
-    for i in range(len(self.yc_noise)):
-      self.yc_noise[i,:] = np.mean(self.yc_noise[i,:])
-    self.yc_noise = self.yc_noise[:,0:1]
 
   # Private method which calculates Jacobian of x transform
   def __xder(self,x,i):
@@ -219,11 +204,14 @@ class GPMAP(MAP,GP):
       xc[-self.obvs:,self.nx_exp+i] = self.xconrevs[self.nx_exp+i].con(x[i])
     kstring = 'GPy.kern.'+self.kernel+'(input_dim=self.nx,variance=1.,lengthscale=1.,ARD=True)'
     kern = eval(kstring)
-    m = GPy.models.GPHeteroscedasticRegression(xc,yc,kern)
+    #m = GPy.models.GPHeteroscedasticRegression(xc,yc,kern)
+    m = GPy.models.GPRegression(xc,yc,kern,normalizer=True)
+    #m.optimize_restarts(3)
     m.kern.lengthscale = self.m.kern.lengthscale
     m.kern.variance = self.m.kern.variance
-    m.het_Gauss.variance[:-self.obvs] = self.m.Gaussian_noise.variance
-    m.het_Gauss.variance[-self.obvs:] = self.yc_noise
+    #m.het_Gauss.variance[:-self.obvs] = self.m.Gaussian_noise.variance
+    #m.het_Gauss.variance[-self.obvs:] = self.yc_noise
+    m.Gaussian_noise.variance = self.m.Gaussian_noise.variance
     return m.log_likelihood()
 
   # Method specific to this class which reverts posterior to original x coords for opt
