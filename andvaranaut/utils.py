@@ -50,9 +50,6 @@ def std_normal(x,dist):
   x = (x-dist.mean())/dist.std()
   return x
 # Convert positive values to unbounded with logarithm
-def log_con(y):
-  return np.log(y)
-# Convert positive values to unbounded with logarithm
 def log1p_con(y):
   return np.log1p(y)
 # Convert positive values to unbounded with logarithm
@@ -114,9 +111,6 @@ def uniform_rev(x,dist):
 def normal_rev(x,dist):
   x = x*dist.std()+dist.mean()
   return x
-# Revert logarithm with power
-def log_rev(y):
-  return np.exp(y)
 # Revert logarithm with power
 def log1p_rev(y):
   return np.expm1(y)
@@ -181,8 +175,13 @@ class nonneg:
     self.rev = nonneg_rev
 class logarithm:
   def __init__(self):
-    self.con = log_con
-    self.rev = log_rev
+    pass
+  def con(self,y):
+    return np.log(y)
+  def rev(self,y):
+    return np.exp(y)
+  def der(self,y):
+    return 1/y
 class log1p:
   def __init__(self):
     self.con = log1p_con
@@ -238,8 +237,63 @@ class powerT:
     self.pt.lambdas_[0] = np.minimum(np.maximum(-0.01,lamb),1.0)
     self.con = partial(powerT_con,pt=self.pt)
     self.rev = partial(powerT_rev,pt=self.pt)
-
-
+class affine:
+  def __init__(self,a,b):
+    self.a = a
+    self.b = b
+  def con(self,y):
+    return self.a + self.b*y
+  def rev(self,y):
+    return (y-self.a)/self.b
+  def der(self,y):
+    return self.b
+class arcsinh:
+  def __init__(self,a,b,c,d):
+    self.a = a
+    self.b = b
+    self.c = c
+    self.d = d
+  def con(self,y):
+    return self.a + self.b*np.arcsinh((y-self.c)/self.d)
+  def rev(self,y):
+    return self.c + self.d*np.sinh((y-self.a)/self.b)
+  def der(self,y):
+    return self.b/np.sqrt(np.power(self.d,2)+np.power(y-self.c,2))
+class boxcox:
+  def __init__(self,y,lamb=None):
+    self.pt = PowerTransformer(method='box-cox',standardize=False)
+    if lamb is None:
+      self.pt.fit(y.reshape(-1,1))
+    else:
+      self.pt.lambdas_[0] = lamb
+  def con(self,y):
+    return self.pt.transform(y.reshape(-1,1))[:,0]
+  def rev(self,y):
+    return self.pt.inverse_transform(y.reshape(-1,1))[:,0]
+  def der(self,y):
+    return np.power(np.abs(y),self.pt.lambdas_[0]-1)
+class sinharcsinh:
+  def __init__(self,a,b):
+    self.a = a
+    self.b = b
+  def con(self,y):
+    return np.sinh(self.b*np.arcsinh(y)-self.a)
+  def rev(self,y):
+    return np.sinh((np.arcsinh(y)+self.a)/self.b)
+  def der(self,y):
+    return self.b*np.cosh(self.b*np.arcsinh(y)-self.a)/np.sqrt(1+np.power(y,2))
+class sal:
+  def __init__(self,a,b,c,d):
+    self.a = a
+    self.b = b
+    self.c = c
+    self.d = d
+  def con(self,y):
+    return self.a + self.b*np.sinh(self.d*np.arcsinh(y)-self.c)
+  def rev(self,y):
+    return np.sinh((np.arcsinh((y-self.a)/self.b)+self.c)/self.d)
+  def der(self,y):
+    return self.b*self.d*np.cosh(self.b*np.arcsinh(y)-self.a)/np.sqrt(1+np.power(y,2))
 
 # Core class which runs target function
 class _core():
