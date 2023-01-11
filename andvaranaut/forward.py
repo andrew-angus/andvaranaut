@@ -665,6 +665,14 @@ class GP(_surrogate):
     pg.constraints = None
     save_object(pg,fname)
 
+  def model_likelihood(self):
+    # Base log likelihood from GPy
+    baseLL = self.m.log_likelihood()
+
+    # Warping term
+    warp = 0
+
+    return baseLL + warp
 
 # Ray remote function wrap around surrogate prediction
 @ray.remote

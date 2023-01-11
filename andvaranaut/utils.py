@@ -175,7 +175,7 @@ class nonneg:
     self.rev = nonneg_rev
 class logarithm:
   def __init__(self):
-    pass
+    self.npar = 0
   def con(self,y):
     return np.log(y)
   def rev(self,y):
@@ -241,6 +241,7 @@ class affine:
   def __init__(self,a,b):
     self.a = a
     self.b = b
+    self.npar = 2
   def con(self,y):
     return self.a + self.b*y
   def rev(self,y):
@@ -253,6 +254,7 @@ class arcsinh:
     self.b = b
     self.c = c
     self.d = d
+    self.npar = 4
   def con(self,y):
     return self.a + self.b*np.arcsinh((y-self.c)/self.d)
   def rev(self,y):
@@ -261,6 +263,7 @@ class arcsinh:
     return self.b/np.sqrt(np.power(self.d,2)+np.power(y-self.c,2))
 class boxcox:
   def __init__(self,y,lamb=None):
+    self.npar = 1
     self.pt = PowerTransformer(method='box-cox',standardize=False)
     if lamb is None:
       self.pt.fit(y.reshape(-1,1))
@@ -276,6 +279,7 @@ class sinharcsinh:
   def __init__(self,a,b):
     self.a = a
     self.b = b
+    self.npar = 2
   def con(self,y):
     return np.sinh(self.b*np.arcsinh(y)-self.a)
   def rev(self,y):
@@ -288,12 +292,48 @@ class sal:
     self.b = b
     self.c = c
     self.d = d
+    self.npar = 4
   def con(self,y):
     return self.a + self.b*np.sinh(self.d*np.arcsinh(y)-self.c)
   def rev(self,y):
     return np.sinh((np.arcsinh((y-self.a)/self.b)+self.c)/self.d)
   def der(self,y):
     return self.b*self.d*np.cosh(self.b*np.arcsinh(y)-self.a)/np.sqrt(1+np.power(y,2))
+# Composite warping class
+class cwgp:
+  def __init__(self,warpings,params):
+    allowed = ['affine','logarithm','arcsinh','boxcox','sinharcsinh','sal']
+    if any warpings not in allowed:
+      raise Exception(f'Only {allowed} classed allowed')
+    self.warpings = []
+    self.params = np.empty(0)
+    self.pid = np.empty(0)
+    # Fill self.warpings with conrev classes \
+    # self.params with their parameters and \
+    # self.pid with the starting index in params for each class
+    for i in warpings:
+      pass
+
+     
+  def con(y):
+    res = y
+    for i in self.warpings:
+      res = i.con(res)
+    return res
+
+  def rev(y):
+    res = y
+    for i in self.warpings.reverse():
+      res = i.rev(res)
+    return res
+
+  def der(y):
+    res = 1
+    x = y
+    for i in self.warpings.reverse():
+      res *= i.der(x)
+      x = i.con(x)
+    return res
 
 # Core class which runs target function
 class _core():
