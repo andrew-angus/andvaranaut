@@ -262,13 +262,17 @@ class arcsinh:
   def der(self,y):
     return self.b/np.sqrt(np.power(self.d,2)+np.power(y-self.c,2))
 class boxcox:
-  def __init__(self,y,lamb=None):
+  def __init__(self,y=None,lamb=None):
     self.npar = 1
     self.pt = PowerTransformer(method='box-cox',standardize=False)
     if lamb is None:
-      self.pt.fit(y.reshape(-1,1))
+      if y is None:
+        raise Exception(\
+            'Error: Must provide either an array for fitting or lambda parameter')
+      else:
+        self.pt.fit(y.reshape(-1,1))
     else:
-      self.pt.lambdas_[0] = lamb
+      self.pt.lambdas_ = np.array([lamb])
   def con(self,y):
     return self.pt.transform(y.reshape(-1,1))[:,0]
   def rev(self,y):
@@ -303,36 +307,66 @@ class sal:
 class cwgp:
   def __init__(self,warpings,params):
     allowed = ['affine','logarithm','arcsinh','boxcox','sinharcsinh','sal']
-    if any warpings not in allowed:
-      raise Exception(f'Only {allowed} classed allowed')
+    self.warping_names = warpings
     self.warpings = []
-    self.params = np.empty(0)
-    self.pid = np.empty(0)
-    # Fill self.warpings with conrev classes \
-    # self.params with their parameters and \
+    self.params = params
+    self.pid = np.zeros(len(warpings))
+    pc = 0
+    pidc = 0
+    # Fill self.warpings with conrev classes and \
     # self.pid with the starting index in params for each class
     for i in warpings:
-      pass
-
+      if i not in allowed:
+        raise Exception(f'Only {allowed} classes allowed')
+      if i == 'affine':
+        self.pid[pidc] = pc
+        self.warpings.append(affine(params[pc],params[pc+1]))
+        pc += 2
+        pidc += 1
+      elif i == 'logarithm':
+        self.pid = np.r_[self.pid,pc]
+        self.warpings.append(affine(params[pc],params[pc+1]))
+        self.warpings.append(logarithm())
+        pidc += 1
+      elif i == 'arcsinh':
+        self.pid = np.r_[self.pid,pc]
+        self.warpings.append(arcsinh(params[pc],params[pc+1],params[pc+2],params[pc+3]))
+        pc += 4
+        pidc += 1
+      elif i == 'boxcox':
+        self.pid = np.r_[self.pid,pc]
+        self.warpings.append(boxcox(lamb=params[pc]))
+        pc += 1
+        pidc += 1
+      if i == 'sinharcsinh':
+        self.pid = np.r_[self.pid,pc]
+        self.warpings.append(sinharcsinh(params[pc],params[pc+1]))
+        pc += 2
+        pidc += 1
+      elif i == 'sal':
+        self.pid = np.r_[self.pid,pc]
+        self.warpings.append(sal(params[pc],params[pc+1],params[pc+2],params[pc+3]))
+        pc += 4
+        pidc += 1
      
-  def con(y):
+  def con(self,y):
     res = y
     for i in self.warpings:
       res = i.con(res)
     return res
 
-  def rev(y):
+  def rev(self,y):
     res = y
-    for i in self.warpings.reverse():
+    for i in reversed(self.warpings):
       res = i.rev(res)
     return res
 
-  def der(y):
-    res = 1
-    x = y
-    for i in self.warpings.reverse():
+  def der(self,y):
+    res = np.ones_like(y)
+    x = copy.deepcopy(y)
+    for i in self.warpings:
       res *= i.der(x)
-      x = i.con(x)
+      x[:,0] = i.con(x[:,0])
     return res
 
 # Core class which runs target function
