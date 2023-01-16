@@ -13,7 +13,7 @@ import copy
 from sklearn.model_selection import train_test_split
 from functools import partial
 from scipy.optimize import minimize,differential_evolution,NonlinearConstraint,Bounds
-from andvaranaut.utils import _core,cdf,save_object
+from andvaranaut.utils import _core,cdf,save_object,cwgp
 import ray
 from matplotlib import ticker
 
@@ -460,12 +460,10 @@ class GP(_surrogate):
     # Fit and return model
     if not self.noise:
       meps = np.finfo(np.float64).eps
-      #m = GPy.models.GPRegression(x,y,kern,noise_var=meps,normalizer=self.normalise)
-      m = GPy.models.WarpedGP(x,y,kern,normalizer=self.normalise)
+      m = GPy.models.GPRegression(x,y,kern,noise_var=meps,normalizer=self.normalise)
       m.likelihood.fix()
     else:
-      #m = GPy.models.GPRegression(x,y,kern,noise_var=1.0,normalizer=self.normalise)
-      m = GPy.models.WarpedGP(x,y,kern,normalizer=self.normalise)
+      m = GPy.models.GPRegression(x,y,kern,noise_var=1.0,normalizer=self.normalise)
     if opt:
       t0 = stopwatch()
       if minl:
@@ -678,26 +676,100 @@ class GP(_surrogate):
 
     return baseLL + warp
 
-  # Method for optimising composite warped gp parameters
-  def cwgp_opt(self,opt_hypers=True):
-    pass
-    # Check ny = 1
+  # Model posterior with prior distribution dict passed as argument
+  def model_posterior(self,prior_dict):
+    LL = self.model_likelihood()
+    pri = 0
+    if 'hypers' in prior_dict:
+      for i,j in enumerate(prior_dict['hypers']):
+        if j is not None:
+          if i < 3:
+            pri += j.logpdf(np.log(self.m.kern.lengthscale[i]))
+          elif i == 3:
+            pri += j.logpdf(np.log(self.m.kern.variance[0]))
+          else:
+            pri += j.logpdf(np.log(self.m.Gaussian_noise.variance[0]))
+    if 'cwgp' in prior_dict:
+      for i,j in enumerate(prior_dict['cwgp']):
+        if self.yconrevs[0].pos[i]:
+          pri += j.logpdf(np.log(self.yconrevs[0].params[i]))
+        else:
+          pri += j.logpdf(self.yconrevs[0].params[i])
 
-    # Check cwgp class is used on y conversion
+    return LL + pri
 
-    # Optimise
-  def cwgp_set(x,set_hypers=True):
-    if set_hypers:
-      hypers = np.exp(x[:5])
-      params = x[5:]
+  # Method for optimising parameters
+  def param_opt(self,method='restarts',restarts=10,opt_hypers=True,\
+      opt_cwgp=False,posterior=True,priors=None):
+
+    # Establish number of parameters and populate default priors if necessary
+    prior_dict = {}
+    if priors is None:
+      default_priors = True
+      priors = []
+    nx = 0
+    if opt_hypers:
+      if default_priors:
+        priors.extend([st.norm() for i in range(5)])
+      prior_dict['hypers'] = priors[:5]
+      nx += 5
+    if opt_cwgp:
+      npar = len(self.yconrevs[0].params) 
+      if default_priors:
+        priors.extend([st.norm() for i in range(npar)])
+      prior_dict['cwgp'] = priors[nx:]
+      nx += npar
+
+    # Setup objective function
+    obj_fun = partial(self.__param_opt,opt_hypers=opt_hypers,\
+        opt_cwgp=opt_cwgp,posterior=posterior,prior_dict=prior_dict)
+
+    # Call optimisation method
+    self._core__opt(obj_fun,method,nx,\
+        nonself=True,priors=priors,restarts=restarts)
+
+  # Optimisation objective function
+  def __param_opt(self,x,opt_hypers,opt_cwgp,posterior,prior_dict):
+    if opt_cwgp and opt_hypers:
+      self.cwgp_set(x[5:])
+      self.hyper_set(x[:5])
+    elif opt_hypers:
+      self.hyper_set(x)
+    elif opt_cwgp:
+      self.cwgp_set(x)
+      self.fit(2)
+    if posterior:
+      return -self.model_posterior(prior_dict)
     else:
-      pass
-    g.change_conrevs(xconrevs=xconrevs,yconrevs=[cwgp(warpings,params)])
-    g.m.kern.lengthscale[:] = hypers[:3]
-    g.m.kern.variance = hypers[3]
-    g.m.Gaussian_noise.variance = hypers[4]
-    return -g.model_likelihood()
+      return -self.model_likelihood()
 
+  def hyper_set(self,x):
+    hypers = np.exp(x)
+    self.m.kern.lengthscale[:] = hypers[:3]
+    self.m.kern.variance = hypers[3]
+    self.m.Gaussian_noise.variance = hypers[4]
+
+  # Set output warping parameters
+  def cwgp_set(self,x):
+    if self.ny != 1:
+      raise Exception(\
+          'CWGP parameter setting method only implemented for single output')
+    if not isinstance(self.yconrevs[0],cwgp):
+      raise Exception(\
+          'y conversion class must be cwgp')
+    for i in range(len(x)):
+      if self.yconrevs[0].pos[i]:
+        x[i] = np.exp(x[i])
+    oldcwgp = self.yconrevs[0]
+    self.change_conrevs(xconrevs=self.xconrevs,\
+        yconrevs=[cwgp(oldcwgp.warping_names,x,self.y)])
+    
+
+  # Modified conversion class change method
+  def change_conrevs(self,xconrevs=None,yconrevs=None):
+    super().change_conrevs(xconrevs=xconrevs,yconrevs=yconrevs)
+    if self.m is not None:
+      self.m.set_XY(self.xc,self.yc)
 
 # Ray remote function wrap around surrogate prediction
 @ray.remote

@@ -1,5 +1,6 @@
 #!/bin/python3
 
+import warnings
 import pickle
 from scipy.special import logit as lg
 import numpy as np
@@ -10,7 +11,7 @@ import multiprocessing as mp
 from time import time as stopwatch
 import os
 import copy
-from scipy.optimize import differential_evolution,NonlinearConstraint,minimize
+from scipy.optimize import differential_evolution,NonlinearConstraint,minimize, Bounds
 from design import ihs
 from sklearn.preprocessing import QuantileTransformer, RobustScaler, PowerTransformer
 
@@ -567,35 +568,53 @@ class _core():
 
   # Core optimizer implementing bounds and constraints
   # Global optisation done either with differential evolution or local minimisation with restarts
-  def __opt(self,fun,method,nx,restarts=10,**kwargs):
+  def __opt(self,fun,method,nx,restarts=10,nonself=False,priors=None,**kwargs):
     # Construct constraints object if using
-    if self.constraints is not None:
-      cons = self.constraints['constraints']
-      upps = self.constraints['upper_bounds']
-      lows = self.constraints['lower_bounds']
-      nlcs = tuple(NonlinearConstraint(cons[i],lows[i],upps[i]) for i in range(len(cons)))
-    else:
-      nlcs = tuple()
-    kwargs['constraints'] = nlcs
+    if not nonself:
+      if self.constraints is not None:
+        cons = self.constraints['constraints']
+        upps = self.constraints['upper_bounds']
+        lows = self.constraints['lower_bounds']
+        nlcs = tuple(NonlinearConstraint(cons[i],lows[i],upps[i]) for i in range(len(cons)))
+      else:
+        nlcs = tuple()
+      kwargs['constraints'] = nlcs
+
+    # Set bounds with priors if exists
+    if priors is not None:
+      lbs = np.zeros(nx)
+      ubs = np.zeros(nx)
+      for j in range(nx):
+        lbs[j] = priors[j].ppf(1e-6)
+        ubs[j] = priors[j].isf(1e-6)
+      kwargs['bounds'] = Bounds(lbs,ubs)
+
     # Global opt method choice
     verbose = self.verbose
     self.verbose = False
     if method == 'DE':
-      res = differential_evolution(fun,**kwargs)
+      with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = differential_evolution(fun,**kwargs)
     else:
       # Add buffer to nlcs to stop overshoot
-      buff = 1e-6
-      for i in nlcs:
-        i.lb += buff
-        i.ub -= buff
+      if not nonself:
+        buff = 1e-6
+        for i in nlcs:
+          i.lb += buff
+          i.ub -= buff
       # Draw starting point samples
       points = (ihs(restarts,nx)\
           -1.0+np.random.rand(restarts,nx))/restarts
-      # Scale by bounds
-      bnds = kwargs['bounds']
-      points = self.__bounds_scale(points,nx,bnds)
+      # Scale by bounds or priors
+      if priors is not None:
+        for j in range(nx):
+          points[:,j] = priors[j].ppf(points[:,j])
+      else:
+        bnds = kwargs['bounds']
+        points = self.__bounds_scale(points,nx,bnds)
       # Check against constraints and replace if invalid
-      if self.constraints is not None:
+      if self.constraints is not None and not nonself:
         points = self.__check_constraints(points)
         npoints = len(points)
         # Add points by random sampling and repeat till all valid
@@ -623,11 +642,14 @@ class _core():
       else:
         results = []
         for i in points:
-          res = minimize(fun,i,**kwargs)
+          with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = minimize(fun,i,**kwargs)
           results.append(res)
 
       # Get best result
       f_vals = np.array([i.fun for i in results])
+      print(f_vals)
       f_success = [i.success for i in results]
       if not any(f_success):
         print('Warning: All minimizations unsuccesful')
@@ -635,6 +657,7 @@ class _core():
         self.verbose = verbose
         if self.verbose:
           print('Removing failed minimizations...')
+        f_success = np.where(np.isnan(f_vals),False,f_success)
         f_vals = f_vals[f_success]
         idx = np.arange(len(results))
         idx = idx[f_success]
