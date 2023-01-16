@@ -194,12 +194,12 @@ class normalise:
   def __init__(self,fac):
     self.con = partial(normalise_con,fac=fac)
     self.rev = partial(normalise_rev,fac=fac)
-class meanstd:
-  def __init__(self,x):
-    self.mean = np.mean(x)
-    self.std = np.std(x)
-    self.con = partial(meanstd_con,mean=self.mean,std=self.std)
-    self.rev = partial(meanstd_rev,mean=self.mean,std=self.std)
+#class meanstd:
+  #def __init__(self,x):
+    #self.mean = np.mean(x)
+    #self.std = np.std(x)
+    #self.con = partial(meanstd_con,mean=self.mean,std=self.std)
+    #self.rev = partial(meanstd_rev,mean=self.mean,std=self.std)
 class minmax:
   def __init__(self,x,centred=False):
     self.centred = centred
@@ -241,6 +241,8 @@ class affine:
   def __init__(self,a,b):
     self.a = a
     self.b = b
+    if not self.b > 0.0:
+      raise Exception('Parameter b must be positive')
     self.npar = 2
   def con(self,y):
     return self.a + self.b*y
@@ -248,6 +250,12 @@ class affine:
     return (y-self.a)/self.b
   def der(self,y):
     return self.b
+class meanstd(affine):
+  def __init__(self,y):
+    mean = np.mean(y)
+    std = np.std(y)
+    self.a = -mean/std
+    self.b = 1/std
 class arcsinh:
   def __init__(self,a,b,c,d):
     self.a = a
@@ -255,6 +263,8 @@ class arcsinh:
     self.c = c
     self.d = d
     self.npar = 4
+    if not self.b > 0.0:
+      raise Exception('Parameter b must be positive')
   def con(self,y):
     return self.a + self.b*np.arcsinh((y-self.c)/self.d)
   def rev(self,y):
@@ -263,7 +273,6 @@ class arcsinh:
     return self.b/np.sqrt(np.power(self.d,2)+np.power(y-self.c,2))
 class boxcox:
   def __init__(self,y=None,lamb=None):
-    self.npar = 1
     self.pt = PowerTransformer(method='box-cox',standardize=False)
     if lamb is None:
       if y is None:
@@ -283,7 +292,8 @@ class sinharcsinh:
   def __init__(self,a,b):
     self.a = a
     self.b = b
-    self.npar = 2
+    if not self.b > 0.0:
+      raise Exception('Parameter b must be positive')
   def con(self,y):
     return np.sinh(self.b*np.arcsinh(y)-self.a)
   def rev(self,y):
@@ -296,23 +306,31 @@ class sal:
     self.b = b
     self.c = c
     self.d = d
-    self.npar = 4
+    if not self.b > 0.0:
+      raise Exception('Parameter b must be positive')
+    if not self.d > 0.0:
+      raise Exception('Parameter d must be positive')
   def con(self,y):
     return self.a + self.b*np.sinh(self.d*np.arcsinh(y)-self.c)
   def rev(self,y):
     return np.sinh((np.arcsinh((y-self.a)/self.b)+self.c)/self.d)
   def der(self,y):
-    return self.b*self.d*np.cosh(self.b*np.arcsinh(y)-self.a)/np.sqrt(1+np.power(y,2))
+    return self.b*self.d*np.cosh(self.d*np.arcsinh(y)-self.c)/np.sqrt(1+np.power(y,2))
+
 # Composite warping class
 class cwgp:
-  def __init__(self,warpings,params):
-    allowed = ['affine','logarithm','arcsinh','boxcox','sinharcsinh','sal']
+  def __init__(self,warpings,params,y=None):
+    allowed = ['affine','logarithm','arcsinh','boxcox','sinharcsinh','sal', \
+               'meanstd','boxcoxf']
     self.warping_names = warpings
     self.warpings = []
     self.params = params
     self.pid = np.zeros(len(warpings))
+    self.pos = np.zeros(len(params),dtype=np.bool_)
     pc = 0
     pidc = 0
+    if y is not None:
+      yc = copy.deepcopy(y)
     # Fill self.warpings with conrev classes and \
     # self.pid with the starting index in params for each class
     for i in warpings:
@@ -321,33 +339,51 @@ class cwgp:
       if i == 'affine':
         self.pid[pidc] = pc
         self.warpings.append(affine(params[pc],params[pc+1]))
+        self.pos[pc:pc+2] = np.array([False,True],dtype=np.bool_)
         pc += 2
         pidc += 1
       elif i == 'logarithm':
-        self.pid = np.r_[self.pid,pc]
-        self.warpings.append(affine(params[pc],params[pc+1]))
+        self.pid[pidc] = pc
         self.warpings.append(logarithm())
         pidc += 1
       elif i == 'arcsinh':
-        self.pid = np.r_[self.pid,pc]
+        self.pid[pidc] = pc
         self.warpings.append(arcsinh(params[pc],params[pc+1],params[pc+2],params[pc+3]))
+        self.pos[pc:pc+4] = np.array([False,True,False,False],dtype=np.bool_)
         pc += 4
         pidc += 1
       elif i == 'boxcox':
-        self.pid = np.r_[self.pid,pc]
+        self.pid[pidc] = pc
         self.warpings.append(boxcox(lamb=params[pc]))
+        self.pos[pc:pc+1] = np.array([False],dtype=np.bool_)
         pc += 1
         pidc += 1
       if i == 'sinharcsinh':
-        self.pid = np.r_[self.pid,pc]
+        self.pid[pidc] = pc
         self.warpings.append(sinharcsinh(params[pc],params[pc+1]))
+        self.pos[pc:pc+2] = np.array([False,True],dtype=np.bool_)
         pc += 2
         pidc += 1
       elif i == 'sal':
-        self.pid = np.r_[self.pid,pc]
+        self.pid[pidc] = pc
         self.warpings.append(sal(params[pc],params[pc+1],params[pc+2],params[pc+3]))
+        self.pos[pc:pc+4] = np.array([False,True,False,True],dtype=np.bool_)
         pc += 4
         pidc += 1
+      elif i == 'meanstd':
+        if y is None:
+          raise Exception('Must supply y array to use meanstd')
+        self.pid[pidc] = pc
+        self.warpings.append(meanstd(yc))
+        pidc += 1
+      elif i == 'boxcoxf':
+        if y is None:
+          raise Exception('Must supply y array to use fitted box cox')
+        self.pid[pidc] = pc
+        self.warpings.append(boxcox(y=yc))
+        pidc += 1
+      if y is not None:
+        yc = self.warpings[-1].con(yc)
      
   def con(self,y):
     res = y

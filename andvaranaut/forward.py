@@ -460,10 +460,12 @@ class GP(_surrogate):
     # Fit and return model
     if not self.noise:
       meps = np.finfo(np.float64).eps
-      m = GPy.models.GPRegression(x,y,kern,noise_var=meps,normalizer=self.normalise)
+      #m = GPy.models.GPRegression(x,y,kern,noise_var=meps,normalizer=self.normalise)
+      m = GPy.models.WarpedGP(x,y,kern,normalizer=self.normalise)
       m.likelihood.fix()
     else:
-      m = GPy.models.GPRegression(x,y,kern,noise_var=1.0,normalizer=self.normalise)
+      #m = GPy.models.GPRegression(x,y,kern,noise_var=1.0,normalizer=self.normalise)
+      m = GPy.models.WarpedGP(x,y,kern,normalizer=self.normalise)
     if opt:
       t0 = stopwatch()
       if minl:
@@ -671,8 +673,31 @@ class GP(_surrogate):
 
     # Warping term
     warp = 0
+    for i in range(self.ny):
+      warp += np.sum(np.log(self.yconrevs[i].der(self.y)))
 
     return baseLL + warp
+
+  # Method for optimising composite warped gp parameters
+  def cwgp_opt(self,opt_hypers=True):
+    pass
+    # Check ny = 1
+
+    # Check cwgp class is used on y conversion
+
+    # Optimise
+  def cwgp_set(x,set_hypers=True):
+    if set_hypers:
+      hypers = np.exp(x[:5])
+      params = x[5:]
+    else:
+      pass
+    g.change_conrevs(xconrevs=xconrevs,yconrevs=[cwgp(warpings,params)])
+    g.m.kern.lengthscale[:] = hypers[:3]
+    g.m.kern.variance = hypers[3]
+    g.m.Gaussian_noise.variance = hypers[4]
+    return -g.model_likelihood()
+
 
 # Ray remote function wrap around surrogate prediction
 @ray.remote
