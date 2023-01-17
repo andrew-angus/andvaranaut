@@ -13,7 +13,7 @@ import copy
 from sklearn.model_selection import train_test_split
 from functools import partial
 from scipy.optimize import minimize,differential_evolution,NonlinearConstraint,Bounds
-from andvaranaut.utils import _core,cdf,save_object,cwgp
+from andvaranaut.utils import _core,cdf,save_object,wgp
 import ray
 from matplotlib import ticker
 
@@ -180,6 +180,20 @@ class _surrogate(LHC):
     self.__conrev_check(xconrevs,yconrevs)
     for i in range(self.nx):
       self.xc[:,i] = self.xconrevs[i].con(self.x[:,i])
+    for i in range(self.ny):
+      self.yc[:,i] = self.yconrevs[i].con(self.y[:,i])
+
+  # Allow for changing conversion/reversion methods
+  def change_xconrevs(self,xconrevs=None):
+    # Check and set new lists, then update converted datasets
+    self.__conrev_check(xconrevs,yconrevs=self.yconrevs)
+    for i in range(self.nx):
+      self.xc[:,i] = self.xconrevs[i].con(self.x[:,i])
+
+  # Allow for changing conversion/reversion methods
+  def change_yconrevs(self,yconrevs=None):
+    # Check and set new lists, then update converted datasets
+    self.__conrev_check(self.xconrevs,yconrevs)
     for i in range(self.ny):
       self.yc[:,i] = self.yconrevs[i].con(self.y[:,i])
 
@@ -470,8 +484,8 @@ class GP(_surrogate):
     kern = eval(kstring)
     # Fit and return model
     if not self.noise:
-      meps = np.finfo(np.float64).eps
-      m = GPy.models.GPRegression(x,y,kern,noise_var=meps,normalizer=self.normalise)
+      #meps = np.finfo(np.float64).eps
+      m = GPy.models.GPRegression(x,y,kern,noise_var=1e-8,normalizer=self.normalise)
       m.likelihood.fix()
     else:
       m = GPy.models.GPRegression(x,y,kern,noise_var=1.0,normalizer=self.normalise)
@@ -711,7 +725,7 @@ class GP(_surrogate):
 
   # Method for optimising parameters
   def param_opt(self,method='restarts',restarts=10,opt_hypers=True,\
-      opt_cwgp=False,posterior=True):
+      opt_cwgp=False,opt_iwgp=False,posterior=True):
 
     # Establish number of parameters and populate default priors if necessary
     nx = 0
@@ -724,21 +738,49 @@ class GP(_surrogate):
       else:
         num = 4
       nx += num
-      splits.append(num)
+      splits.append(nx)
     if opt_cwgp:
       if 'cwgp' not in self.prior_dict:
         self.prior_dict['cwgp'] = self.yconrevs[0].default_priors
       npar = len(self.yconrevs[0].params) 
       priors.extend(self.prior_dict['cwgp'])
       nx += npar
-      splits.append(npar)
+      splits.append(nx)
+    if opt_iwgp:
+      if 'iwgp' not in self.prior_dict:
+        self.prior_dict['iwgp'] = []
+        npar = 0
+        for i in range(self.nx):
+          if isinstance(self.xconrevs[i],wgp):
+            self.prior_dict['iwgp'].extend(self.xconrevs[i].default_priors)
+            npar += 2
+      else:
+        npar = len(self.prior_dict['iwgp'])
+      priors.extend(self.prior_dict['iwgp'])
+      nx += npar
+      splits.append(nx)
 
     # Setup objective function
-    if opt_cwgp and opt_hypers:
+    if opt_iwgp and opt_cwgp and opt_hypers:
+      if posterior:
+        obj_fun = partial(self.__param_opt_phic,splits=splits)
+      else:
+        obj_fun = partial(self.__param_opt_lhic,splits=splits)
+    elif opt_cwgp and opt_hypers:
       if posterior:
         obj_fun = partial(self.__param_opt_phc,splits=splits)
       else:
         obj_fun = partial(self.__param_opt_lhc,splits=splits)
+    elif opt_iwgp and opt_hypers:
+      if posterior:
+        obj_fun = partial(self.__param_opt_phi,splits=splits)
+      else:
+        obj_fun = partial(self.__param_opt_lhi,splits=splits)
+    elif opt_iwgp and opt_cwgp:
+      if posterior:
+        obj_fun = partial(self.__param_opt_pic,splits=splits)
+      else:
+        obj_fun = partial(self.__param_opt_lic,splits=splits)
     elif opt_cwgp:
       if posterior:
         obj_fun = self.__param_opt_pc
@@ -749,19 +791,24 @@ class GP(_surrogate):
         obj_fun = self.__param_opt_ph
       else:
         obj_fun = self.__param_opt_lh
+    elif opt_iwgp:
+      if posterior:
+        obj_fun = self.__param_opt_pi
+      else:
+        obj_fun = self.__param_opt_li
 
     # Call optimisation method
     self._core__opt(obj_fun,method,nx,\
         nonself=True,priors=priors,restarts=restarts)
 
   def __param_opt_lhc(self,x,splits):
-    self.cwgp_set(x[splits[0]:])
     self.hyper_set(x[:splits[0]])
+    self.cwgp_set(x[splits[0]:])
     return -self.model_likelihood()
 
   def __param_opt_phc(self,x,splits):
-    self.cwgp_set(x[splits[0]:])
     self.hyper_set(x[:splits[0]])
+    self.cwgp_set(x[splits[0]:])
     return -self.model_posterior()
 
   def __param_opt_lh(self,x):
@@ -782,6 +829,50 @@ class GP(_surrogate):
     self.fit(2)
     return -self.model_posterior()
 
+  def __param_opt_li(self,x):
+    self.iwgp_set(x)
+    self.fit(2)
+    return -self.model_likelihood()
+
+  def __param_opt_pi(self,x):
+    self.iwgp_set(x)
+    self.fit(2)
+    return -self.model_posterior()
+
+  def __param_opt_lic(self,x,splits):
+    self.cwgp_set(x[:splits[0]])
+    self.iwgp_set(x[splits[0]:])
+    self.fit(2)
+    return -self.model_likelihood()
+
+  def __param_opt_pic(self,x,splits):
+    self.cwgp_set(x[:splits[0]])
+    self.iwgp_set(x[splits[0]:])
+    self.fit(2)
+    return -self.model_posterior()
+
+  def __param_opt_lhi(self,x,splits):
+    self.hyper_set(x[:splits[0]])
+    self.iwgp_set(x[splits[0]:])
+    return -self.model_likelihood()
+
+  def __param_opt_phi(self,x,splits):
+    self.hyper_set(x[:splits[0]])
+    self.iwgp_set(x[splits[0]:])
+    return -self.model_posterior()
+
+  def __param_opt_lhic(self,x,splits):
+    self.hyper_set(x[:splits[0]])
+    self.cwgp_set(x[splits[0]:splits[1]])
+    self.iwgp_set(x[splits[1]:])
+    return -self.model_likelihood()
+
+  def __param_opt_phic(self,x,splits):
+    self.hyper_set(x[:splits[0]])
+    self.cwgp_set(x[splits[0]:splits[1]])
+    self.iwgp_set(x[splits[1]:])
+    return -self.model_posterior()
+
   def hyper_set(self,x):
     hypers = np.exp(x)
     self.m.kern.lengthscale[:] = hypers[:3]
@@ -791,25 +882,45 @@ class GP(_surrogate):
 
   # Set output warping parameters
   def cwgp_set(self,x):
-    if self.ny != 1:
-      raise Exception(\
-          'CWGP parameter setting method only implemented for single output')
-    if not isinstance(self.yconrevs[0],cwgp):
-      raise Exception(\
-          'y conversion class must be cwgp')
     for i in range(len(x)):
       if self.yconrevs[0].pos[i]:
         x[i] = np.exp(x[i])
-    oldcwgp = self.yconrevs[0]
-    self.change_conrevs(xconrevs=self.xconrevs,\
-        yconrevs=[cwgp(oldcwgp.warping_names,x,self.y)])
-    
+    self.change_yconrevs(yconrevs=[wgp(self.yconrevs[0].warping_names,x,self.y)])
 
+  # Set input warping parameters
+  def iwgp_set(self,x):
+    xconrevs = []
+    rc = 0
+    for i in range(self.nx):
+      if isinstance(self.xconrevs[i],wgp):
+        ran = len(self.xconrevs[i].params)
+        for j in range(ran):
+          if self.xconrevs[i].pos[j]:
+            x[rc+j] = np.exp(x[rc+j])
+        xconrevs.append(wgp(self.xconrevs[i].warping_names,x[rc:rc+ran]\
+            ,y=self.x[:,i],xdist=self.priors[i]))
+        rc += ran
+      else:
+        xconrevs.append(self.xconrevs[i])
+    self.change_xconrevs(xconrevs=xconrevs)
+    
   # Modified conversion class change method
   def change_conrevs(self,xconrevs=None,yconrevs=None):
     super().change_conrevs(xconrevs=xconrevs,yconrevs=yconrevs)
     if self.m is not None:
       self.m.set_XY(self.xc,self.yc)
+
+  # Modified conversion class change method
+  def change_xconrevs(self,xconrevs=None):
+    super().change_xconrevs(xconrevs=xconrevs)
+    if self.m is not None:
+      self.m.set_X(self.xc)
+
+  # Modified conversion class change method
+  def change_yconrevs(self,yconrevs=None):
+    super().change_yconrevs(yconrevs=yconrevs)
+    if self.m is not None:
+      self.m.set_Y(self.yc)
 
 # Ray remote function wrap around surrogate prediction
 @ray.remote

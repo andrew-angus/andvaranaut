@@ -154,10 +154,10 @@ class normal:
   def __init__(self,dist):
     self.con = partial(std_normal,dist=dist)
     self.rev = partial(normal_rev,dist=dist)
-class uniform:
-  def __init__(self,dist):
-    self.con = partial(std_uniform,dist=dist)
-    self.rev = partial(uniform_rev,dist=dist)
+#class uniform:
+#  def __init__(self,dist):
+#    self.con = partial(std_uniform,dist=dist)
+#    self.rev = partial(uniform_rev,dist=dist)
 class logit_logistic:
   def __init__(self,dist):
     self.con = partial(logit,dist=dist)
@@ -201,21 +201,21 @@ class normalise:
     #self.std = np.std(x)
     #self.con = partial(meanstd_con,mean=self.mean,std=self.std)
     #self.rev = partial(meanstd_rev,mean=self.mean,std=self.std)
-class minmax:
-  def __init__(self,x,centred=False):
-    self.centred = centred
-    self.min = np.min(x)
-    self.max = np.max(x)
-  def con(self,x):
-    if self.centred:
-      return (2*x - (self.max+self.min))/(self.max-self.min)
-    else:
-      return (x - self.min)/(self.max-self.min)
-  def rev(self,x):
-    if self.centred:
-      return (x*(self.max-self.min)+(self.max+self.min))/2
-    else:
-      return x*(self.max-self.min)+self.min
+#class minmax:
+  #def __init__(self,x,centred=False):
+  #  self.centred = centred
+  #  self.min = np.min(x)
+  #  self.max = np.max(x)
+  #def con(self,x):
+  #  if self.centred:
+  #    return (2*x - (self.max+self.min))/(self.max-self.min)
+  #  else:
+  #    return (x - self.min)/(self.max-self.min)
+  #def rev(self,x):
+  #  if self.centred:
+  #    return (x*(self.max-self.min)+(self.max+self.min))/2
+  #  else:
+  #    return x*(self.max-self.min)+self.min
 class quantile:
   def __init__(self,x,mode='normal'):
     self.mode = mode
@@ -257,6 +257,26 @@ class meanstd(affine):
     std = np.std(y)
     self.a = -mean/std
     self.b = 1/std
+class maxmin(affine):
+  def __init__(self,x,centred=False,safety=0.0):
+    xmin = np.min(x)*(1-safety)
+    xmax = np.max(x)*(1+safety)
+    xminus = xmax-xmin
+    xplus = xmax+xmin
+    if centred:
+      self.a = -xplus/xminus
+      self.b = 2/xminus
+    else:
+      self.a = -xmin/xminus
+      self.b = 1/xminus
+class uniform(affine):
+  def __init__(self,dist):
+    self.con = partial(std_uniform,dist=dist)
+    self.rev = partial(uniform_rev,dist=dist)
+    intv = dist.interval(1.0)
+    span = intv[1]-intv[0]
+    self.a = -intv[0]/span
+    self.b = 1/span
 class arcsinh:
   def __init__(self,a,b,c,d):
     self.a = a
@@ -320,12 +340,29 @@ class sal:
     return np.sinh((np.arcsinh((y-self.a)/self.b)+self.c)/self.d)
   def der(self,y):
     return self.b*self.d*np.cosh(self.d*np.arcsinh(y)-self.c)/np.sqrt(1+np.power(y,2))
+# Input warping with kumaraswamy distribution
+class kumaraswamy:
+  def __init__(self,a,b):
+    self.a = a
+    self.b = b
+    if not self.a > 0.0:
+      raise Exception('Parameter a must be positive')
+    if not self.b > 0.0:
+      raise Exception('Parameter b must be positive')
+    self.default_priors = [st.norm(),st.norm()]
+  def con(self,x):
+    return 1 - np.power(1-np.power(x,self.a),self.b)
+  def rev(self,x):
+    return np.power(1-np.power(1-x,1/self.b),1/self.a)
+  def der(self,x):
+    return self.a*self.b*np.power(x,self.a-1)*np.power(1-np.power(x,self.a),self.b-1)
+
 
 # Composite warping class
-class cwgp:
-  def __init__(self,warpings,params,y=None):
+class wgp:
+  def __init__(self,warpings,params,y=None,xdist=None):
     allowed = ['affine','logarithm','arcsinh','boxcox','sinharcsinh','sal', \
-               'meanstd','boxcoxf']
+               'meanstd','boxcoxf','uniform','maxmin','kumaraswamy']
     self.warping_names = warpings
     self.warpings = []
     self.params = params
@@ -380,6 +417,13 @@ class cwgp:
         self.default_priors.extend(self.warpings[-1].default_priors)
         pc += 4
         pidc += 1
+      if i == 'kumaraswamy':
+        self.pid[pidc] = pc
+        self.warpings.append(kumaraswamy(params[pc],params[pc+1]))
+        self.pos[pc:pc+2] = np.array([True,True],dtype=np.bool_)
+        self.default_priors.extend(self.warpings[-1].default_priors)
+        pc += 2
+        pidc += 1
       elif i == 'meanstd':
         if y is None:
           raise Exception('Must supply y array to use meanstd')
@@ -391,6 +435,18 @@ class cwgp:
           raise Exception('Must supply y array to use fitted box cox')
         self.pid[pidc] = pc
         self.warpings.append(boxcox(y=yc))
+        pidc += 1
+      elif i == 'uniform':
+        if xdist is None:
+          raise Exception('Must supply x distribution to use uniform')
+        self.pid[pidc] = pc
+        self.warpings.append(uniform(xdist))
+        pidc += 1
+      elif i == 'maxmin':
+        if y is None:
+          raise Exception('Must supply y array to use maxmin')
+        self.pid[pidc] = pc
+        self.warpings.append(maxmin(yc))
         pidc += 1
       if y is not None:
         yc = self.warpings[-1].con(yc)
