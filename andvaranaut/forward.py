@@ -245,11 +245,22 @@ class _none_conrev:
 
 # Inherit from surrogate class and add GP specific methods
 class GP(_surrogate):
-  def __init__(self,kernel='RBF',noise=True,normalise=True,**kwargs):
+  def __init__(self,kernel='RBF',noise=True,normalise=True,prior_dict=None,**kwargs):
     super().__init__(**kwargs)
     self.change_model(kernel,noise,normalise)
+    self.set_prior_dict(prior_dict)
     self.__scrub_train_test()
     self._xRF = None
+
+  # Set prior dictionary, defaulting to lognormals on hypers
+  def set_prior_dict(self,prior_dict):
+    if prior_dict is None:
+      prior_dict = {}
+      if self.noise:
+        prior_dict['hypers'] = [st.norm() for i in range(5)]
+      else:
+        prior_dict['hypers'] = [st.norm() for i in range(4)]
+    self.prior_dict = prior_dict
 
   def __scrub_train_test(self):
     self.xtrain = None
@@ -677,11 +688,11 @@ class GP(_surrogate):
     return baseLL + warp
 
   # Model posterior with prior distribution dict passed as argument
-  def model_posterior(self,prior_dict):
+  def model_posterior(self):
     LL = self.model_likelihood()
     pri = 0
-    if 'hypers' in prior_dict:
-      for i,j in enumerate(prior_dict['hypers']):
+    if 'hypers' in self.prior_dict:
+      for i,j in enumerate(self.prior_dict['hypers']):
         if j is not None:
           if i < 3:
             pri += j.logpdf(np.log(self.m.kern.lengthscale[i]))
@@ -689,8 +700,8 @@ class GP(_surrogate):
             pri += j.logpdf(np.log(self.m.kern.variance[0]))
           else:
             pri += j.logpdf(np.log(self.m.Gaussian_noise.variance[0]))
-    if 'cwgp' in prior_dict:
-      for i,j in enumerate(prior_dict['cwgp']):
+    if 'cwgp' in self.prior_dict:
+      for i,j in enumerate(self.prior_dict['cwgp']):
         if self.yconrevs[0].pos[i]:
           pri += j.logpdf(np.log(self.yconrevs[0].params[i]))
         else:
@@ -700,54 +711,83 @@ class GP(_surrogate):
 
   # Method for optimising parameters
   def param_opt(self,method='restarts',restarts=10,opt_hypers=True,\
-      opt_cwgp=False,posterior=True,priors=None):
+      opt_cwgp=False,posterior=True):
 
     # Establish number of parameters and populate default priors if necessary
-    prior_dict = {}
-    if priors is None:
-      default_priors = True
-      priors = []
     nx = 0
+    priors = []
+    splits = []
     if opt_hypers:
-      if default_priors:
-        priors.extend([st.norm() for i in range(5)])
-      prior_dict['hypers'] = priors[:5]
-      nx += 5
+      priors.extend(self.prior_dict['hypers'])
+      if self.noise:
+        num = 5
+      else:
+        num = 4
+      nx += num
+      splits.append(num)
     if opt_cwgp:
+      if 'cwgp' not in self.prior_dict:
+        self.prior_dict['cwgp'] = self.yconrevs[0].default_priors
       npar = len(self.yconrevs[0].params) 
-      if default_priors:
-        priors.extend([st.norm() for i in range(npar)])
-      prior_dict['cwgp'] = priors[nx:]
+      priors.extend(self.prior_dict['cwgp'])
       nx += npar
+      splits.append(npar)
 
     # Setup objective function
-    obj_fun = partial(self.__param_opt,opt_hypers=opt_hypers,\
-        opt_cwgp=opt_cwgp,posterior=posterior,prior_dict=prior_dict)
+    if opt_cwgp and opt_hypers:
+      if posterior:
+        obj_fun = partial(self.__param_opt_phc,splits=splits)
+      else:
+        obj_fun = partial(self.__param_opt_lhc,splits=splits)
+    elif opt_cwgp:
+      if posterior:
+        obj_fun = self.__param_opt_pc
+      else:
+        obj_fun = self.__param_opt_lc
+    elif opt_hypers:
+      if posterior:
+        obj_fun = self.__param_opt_ph
+      else:
+        obj_fun = self.__param_opt_lh
 
     # Call optimisation method
     self._core__opt(obj_fun,method,nx,\
         nonself=True,priors=priors,restarts=restarts)
 
-  # Optimisation objective function
-  def __param_opt(self,x,opt_hypers,opt_cwgp,posterior,prior_dict):
-    if opt_cwgp and opt_hypers:
-      self.cwgp_set(x[5:])
-      self.hyper_set(x[:5])
-    elif opt_hypers:
-      self.hyper_set(x)
-    elif opt_cwgp:
-      self.cwgp_set(x)
-      self.fit(2)
-    if posterior:
-      return -self.model_posterior(prior_dict)
-    else:
-      return -self.model_likelihood()
+  def __param_opt_lhc(self,x,splits):
+    self.cwgp_set(x[splits[0]:])
+    self.hyper_set(x[:splits[0]])
+    return -self.model_likelihood()
+
+  def __param_opt_phc(self,x,splits):
+    self.cwgp_set(x[splits[0]:])
+    self.hyper_set(x[:splits[0]])
+    return -self.model_posterior()
+
+  def __param_opt_lh(self,x):
+    self.hyper_set(x)
+    return -self.model_likelihood()
+
+  def __param_opt_ph(self,x):
+    self.hyper_set(x)
+    return -self.model_posterior()
+
+  def __param_opt_lc(self,x):
+    self.cwgp_set(x)
+    self.fit(2)
+    return -self.model_likelihood()
+
+  def __param_opt_pc(self,x):
+    self.cwgp_set(x)
+    self.fit(2)
+    return -self.model_posterior()
 
   def hyper_set(self,x):
     hypers = np.exp(x)
     self.m.kern.lengthscale[:] = hypers[:3]
     self.m.kern.variance = hypers[3]
-    self.m.Gaussian_noise.variance = hypers[4]
+    if self.noise:
+      self.m.Gaussian_noise.variance = hypers[4]
 
   # Set output warping parameters
   def cwgp_set(self,x):

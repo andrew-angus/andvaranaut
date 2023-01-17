@@ -176,7 +176,7 @@ class nonneg:
     self.rev = nonneg_rev
 class logarithm:
   def __init__(self):
-    self.npar = 0
+    pass
   def con(self,y):
     return np.log(y)
   def rev(self,y):
@@ -244,7 +244,7 @@ class affine:
     self.b = b
     if not self.b > 0.0:
       raise Exception('Parameter b must be positive')
-    self.npar = 2
+    self.default_priors = [st.norm(),st.norm()]
   def con(self,y):
     return self.a + self.b*y
   def rev(self,y):
@@ -263,7 +263,7 @@ class arcsinh:
     self.b = b
     self.c = c
     self.d = d
-    self.npar = 4
+    self.default_priors = [st.norm(),st.norm(),st.norm(),st.norm(loc=1)]
     if not self.b > 0.0:
       raise Exception('Parameter b must be positive')
   def con(self,y):
@@ -283,6 +283,7 @@ class boxcox:
         self.pt.fit(y.reshape(-1,1))
     else:
       self.pt.lambdas_ = np.array([lamb])
+    self.default_priors = [st.norm(loc=1)]
   def con(self,y):
     return self.pt.transform(y.reshape(-1,1))[:,0]
   def rev(self,y):
@@ -295,6 +296,7 @@ class sinharcsinh:
     self.b = b
     if not self.b > 0.0:
       raise Exception('Parameter b must be positive')
+    self.default_priors = [st.norm(),st.norm()]
   def con(self,y):
     return np.sinh(self.b*np.arcsinh(y)-self.a)
   def rev(self,y):
@@ -311,6 +313,7 @@ class sal:
       raise Exception('Parameter b must be positive')
     if not self.d > 0.0:
       raise Exception('Parameter d must be positive')
+    self.default_priors = [st.norm(),st.norm(),st.norm(),st.norm()]
   def con(self,y):
     return self.a + self.b*np.sinh(self.d*np.arcsinh(y)-self.c)
   def rev(self,y):
@@ -328,6 +331,7 @@ class cwgp:
     self.params = params
     self.pid = np.zeros(len(warpings))
     self.pos = np.zeros(len(params),dtype=np.bool_)
+    self.default_priors = []
     pc = 0
     pidc = 0
     if y is not None:
@@ -341,6 +345,7 @@ class cwgp:
         self.pid[pidc] = pc
         self.warpings.append(affine(params[pc],params[pc+1]))
         self.pos[pc:pc+2] = np.array([False,True],dtype=np.bool_)
+        self.default_priors.extend(self.warpings[-1].default_priors)
         pc += 2
         pidc += 1
       elif i == 'logarithm':
@@ -351,24 +356,28 @@ class cwgp:
         self.pid[pidc] = pc
         self.warpings.append(arcsinh(params[pc],params[pc+1],params[pc+2],params[pc+3]))
         self.pos[pc:pc+4] = np.array([False,True,False,False],dtype=np.bool_)
+        self.default_priors.extend(self.warpings[-1].default_priors)
         pc += 4
         pidc += 1
       elif i == 'boxcox':
         self.pid[pidc] = pc
         self.warpings.append(boxcox(lamb=params[pc]))
         self.pos[pc:pc+1] = np.array([False],dtype=np.bool_)
+        self.default_priors.extend(self.warpings[-1].default_priors)
         pc += 1
         pidc += 1
       if i == 'sinharcsinh':
         self.pid[pidc] = pc
         self.warpings.append(sinharcsinh(params[pc],params[pc+1]))
         self.pos[pc:pc+2] = np.array([False,True],dtype=np.bool_)
+        self.default_priors.extend(self.warpings[-1].default_priors)
         pc += 2
         pidc += 1
       elif i == 'sal':
         self.pid[pidc] = pc
         self.warpings.append(sal(params[pc],params[pc+1],params[pc+2],params[pc+3]))
         self.pos[pc:pc+4] = np.array([False,True,False,True],dtype=np.bool_)
+        self.default_priors.extend(self.warpings[-1].default_priors)
         pc += 4
         pidc += 1
       elif i == 'meanstd':
@@ -649,7 +658,6 @@ class _core():
 
       # Get best result
       f_vals = np.array([i.fun for i in results])
-      print(f_vals)
       f_success = [i.success for i in results]
       if not any(f_success):
         print('Warning: All minimizations unsuccesful')
