@@ -14,6 +14,9 @@ import copy
 from scipy.optimize import differential_evolution,NonlinearConstraint,minimize, Bounds
 from design import ihs
 from sklearn.preprocessing import QuantileTransformer, RobustScaler, PowerTransformer
+import GPy
+from GPyOpt.models import GPModel
+from GPyOpt.methods import BayesianOptimization
 
 # Save and load with pickle
 # ToDo: Faster with cpickle 
@@ -650,8 +653,8 @@ class _core():
       lbs = np.zeros(nx)
       ubs = np.zeros(nx)
       for j in range(nx):
-        lbs[j] = priors[j].ppf(1e-6)
-        ubs[j] = priors[j].isf(1e-6)
+        lbs[j] = priors[j].ppf(1e-8)
+        ubs[j] = priors[j].isf(1e-8)
       kwargs['bounds'] = Bounds(lbs,ubs)
 
     # Global opt method choice
@@ -661,7 +664,7 @@ class _core():
       with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         res = differential_evolution(fun,**kwargs)
-    else:
+    elif method == 'restarts':
       # Add buffer to nlcs to stop overshoot
       if not nonself:
         buff = 1e-6
@@ -729,6 +732,64 @@ class _core():
 
       best = np.argmin(f_vals)
       res = results[best]
+
+    elif method == 'BO':
+      # Setup domain as list of dictionaries for each variable
+      domain = []
+      for i in range(nx):
+        lb = kwargs['bounds'].lb[i]
+        ub = kwargs['bounds'].ub[i]
+        xdict = {'name': f'var_{i}','type':'continuous','domain':(lb,ub)}
+        domain.append(xdict)
+
+      ## TODO: Constraint setup
+      
+      # Wrapper around function which inputs 2D arrays
+      def fun_wrap(x):
+        y = np.zeros((len(x),1))
+        for i in range(len(x)):
+          y[i,:] = fun(x[i,:])
+        return y
+      
+      # Setup BayesianOptimisation object
+      if not nonself:
+        kstring = 'GPy.kern.'+self.kernel+\
+            '(input_dim=self.nx,variance=1.,lengthscale=1.,ARD=True)'
+        kern = eval(kstring)
+        bogp = GPModel(kernel=kern,exact_feval=not self.noise,\
+            optimize_restarts=restarts,verbose=False,ARD=True)
+        bopt = BayesianOptimization(f=fun_wrap,domain=domain,\
+            X=self.xc,Y=self.yc,normalize_Y=self.normalise,\
+            exact_feval=not self.noise,verbosity=False,\
+            initial_design_numdata=0,model=bogp)
+      else:
+        if 'initial' in kwargs:
+          initial = kwargs['initial']
+        else:
+          initial = 20 
+        if 'model_type' in kwargs:
+          model_type = kwargs['model_type']
+        else:
+          model_type = 'GP' 
+        bopt = BayesianOptimization(f=fun_wrap,domain=domain,\
+            exact_feval=True,verbosity=False,model_type=model_type,\
+            initial_design_numdata=initial,ARD=True)
+
+      # Run optimisation
+      if 'max_iter' in kwargs:
+        bopt.run_optimization(max_iter=kwargs['max_iter'])
+      else:
+        bopt.run_optimization(max_iter=15)
+
+      xopt = bopt.x_opt
+      yopt = bopt.fx_opt
+
+      class res_class:
+        def __init__(self,xopt,yopt):
+          self.x = xopt
+          self.fun = yopt
+
+      res = res_class(xopt,yopt)
 
     self.verbose = verbose
     return res

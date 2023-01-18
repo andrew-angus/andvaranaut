@@ -3,6 +3,8 @@
 import numpy as np
 from design import latin_random,ihs
 import GPy
+from GPyOpt.models import GPModel
+from GPyOpt.methods import BayesianOptimization
 import scipy.stats as st
 from time import time as stopwatch
 import seaborn as sns
@@ -725,7 +727,7 @@ class GP(_surrogate):
 
   # Method for optimising parameters
   def param_opt(self,method='restarts',restarts=10,opt_hypers=True,\
-      opt_cwgp=False,opt_iwgp=False,posterior=True):
+      opt_cwgp=False,opt_iwgp=False,posterior=True,**kwargs):
 
     # Establish number of parameters and populate default priors if necessary
     nx = 0
@@ -759,6 +761,9 @@ class GP(_surrogate):
       priors.extend(self.prior_dict['iwgp'])
       nx += npar
       splits.append(nx)
+
+    if self.verbose:
+      print(f'Optimising {nx} parameters...')
 
     # Setup objective function
     if opt_iwgp and opt_cwgp and opt_hypers:
@@ -798,8 +803,11 @@ class GP(_surrogate):
         obj_fun = self.__param_opt_li
 
     # Call optimisation method
-    self._core__opt(obj_fun,method,nx,\
-        nonself=True,priors=priors,restarts=restarts)
+    res = self._core__opt(obj_fun,method,nx,\
+        nonself=True,priors=priors,restarts=restarts,**kwargs)
+
+    # Ensure opt used
+    obj_fun(res.x)
 
   def __param_opt_lhc(self,x,splits):
     self.hyper_set(x[:splits[0]])
@@ -921,6 +929,54 @@ class GP(_surrogate):
     super().change_yconrevs(yconrevs=yconrevs)
     if self.m is not None:
       self.m.set_Y(self.yc)
+
+  # Minimise output variable using GPyOpt 
+  def bayesian_minimisation(self,max_iter=15,minmax=False,restarts=5,revert=True):
+
+    if self.ny > 1:
+      raise Exception('Bayesian minimisation only implemented for single output')
+
+    if self.verbose:
+      print('Running Bayesian minimisation...')
+    
+    # Setup domain as list of dictionaries for each variable
+    lbs = np.zeros(self.nx)
+    ubs = np.zeros(self.nx)
+    tiny = np.finfo(np.float64).tiny
+    for i in range(self.nx):
+      if minmax:
+        lbs[i] = np.min(self.xc[:,i])
+        ubs[i] = np.max(self.xc[:,i])
+      else:
+        lbs[i] = self.xconrevs[i].con(self.priors[i].ppf(tiny))
+        ubs[i] = self.xconrevs[i].con(self.priors[i].isf(tiny))
+    bnds = Bounds(lb=lbs,ub=ubs)
+
+    ## TODO: Constraint setup
+    
+    # Setup objective function which is target plus conversion/reversion
+    def target_transform(xc):
+      xr = np.zeros_like(xc)
+      for i in range(self.nx):
+        xr[i] = self.xconrevs[i].rev(xc[i])
+      yr = self.target(xr)
+      yc = self.yconrevs[0].con(yr)
+      return yc
+
+    # Run optimisation
+    res = self._core__opt(target_transform,'BO',self.nx,restarts,\
+        bounds=bnds,max_iter=max_iter)
+
+    xopt = res.x
+    yopt = res.fun
+
+    # Revert to original data
+    if revert:
+      yopt = self.yconrevs[0].rev(yopt)
+      for i in range(self.nx):
+        xopt[i] = self.xconrevs[i].rev(xopt[i])
+
+    return xopt,yopt
 
 # Ray remote function wrap around surrogate prediction
 @ray.remote
