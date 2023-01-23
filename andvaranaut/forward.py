@@ -982,9 +982,9 @@ class GP(_surrogate):
 
 # Inherit from surrogate class and add GP specific methods
 class GPyMC(_surrogate):
-  def __init__(self,kernel='RBF',noise=True,normalise=True,prior_dict=None,**kwargs):
+  def __init__(self,kernel='RBF',noise=True,prior_dict=None,**kwargs):
     super().__init__(**kwargs)
-    self.change_model(kernel,noise,normalise)
+    self.change_model(kernel,noise)
     self.set_prior_dict(prior_dict)
     self.__scrub_train_test()
 
@@ -1026,13 +1026,14 @@ class GPyMC(_surrogate):
     self.__scrub_train_test()
 
   # Fit GP standard method
-  def fit(self,mcmc=False,return_data=False,**kwargs):
-    self.m, self.gp, self.map, data = self.__fit(self.xc,self.yc,mcmc,**kwargs)
+  def fit(self,method='mcmc_mean',return_data=False,**kwargs):
+    self.m, self.gp, self.hypers, data = self.__fit(self.xc,self.yc,method,**kwargs)
     if return_data:
       return data
 
   # More flexible private fit method which can use unconverted or train-test datasets
-  def __fit(self,x,y,mcmc,**kwargs):
+  def __fit(self,x,y,method,**kwargs):
+    
     # PyMC context manager
     m = pm.Model()
     with m:
@@ -1042,12 +1043,11 @@ class GPyMC(_surrogate):
       #kvar = hdict[self.nx]
       if self.noise:
         #gvar = hdict[self.nx+1]
-        gvar = pm.Gamma('gv',alpha=2.0,beta=0.5)
+        gvar = 1e-8 + pm.HalfNormal('gv',sigma=0.4)
       else:
         gvar = 1e-8
-      #kls = pm.InverseGamma('l',alpha=2.0,beta=1.0,shape=3)
-      kls = pm.Gamma('l',alpha=2.0,beta=0.5,shape=3)
-      kvar = pm.Gamma('kv',alpha=2.0,beta=0.5)
+      kls = pm.Gamma('l',alpha=2.15,beta=6.91,shape=3)
+      kvar = pm.LogNormal('kv',mu=0.0,sigma=0.4)
 
       # Setup kernel
       if self.kernel == 'RBF':
@@ -1064,24 +1064,32 @@ class GPyMC(_surrogate):
       y_ = gp.marginal_likelihood("y", X=self.xc, y=self.yc[:,0], noise=gvar)
 
       # Fit
-      if mcmc:
-        data = pm.sample(**kwargs)
-        #mp = data.posterior.mean(dim=["chain", "draw"])
-        pos = data.posterior.stack(draws=("chain", "draw"))
-        ss = data.sample_stats.stack(draws=("chain", "draw"))
-        lpmax = np.argmax(ss['lp'].values)
-        if self.verbose:
-          print(f'Max log posterior: {lpmax}')
-        lpamax = np.argmax(ss['lp'].values)
-        mp = {}
-        for key in pos:
-          if len(pos[key].values.shape) > 1:
-            mp[key] = pos[key].values[:,lpamax]
-          else:
-            mp[key] = np.array(pos[key].values[lpamax])
-      else:
+      if method == 'map':
         data = pm.find_MAP(**kwargs)
         mp = copy.deepcopy(data)
+      else:
+        data = pm.sample(**kwargs)
+        if method == 'mcmc_mean':
+          mean = data.posterior.mean(dim=["chain", "draw"])
+          mp = {}
+          for key in mean:
+            if len(mean[key].values.shape) > 1:
+              mp[key] = mean[key].values
+            else:
+              mp[key] = np.array(mean[key].values)
+        else:
+          pos = data.posterior.stack(draws=("chain", "draw"))
+          ss = data.sample_stats.stack(draws=("chain", "draw"))
+          lpmax = np.max(ss['lp'].values)
+          if self.verbose:
+            print(f'Max log posterior: {lpmax}')
+          lpamax = np.argmax(ss['lp'].values)
+          mp = {}
+          for key in pos:
+            if len(pos[key].values.shape) > 1:
+              mp[key] = pos[key].values[:,lpamax]
+            else:
+              mp[key] = np.array(pos[key].values[lpamax])
 
     return m, gp, mp, data
 
@@ -1118,7 +1126,7 @@ class GPyMC(_surrogate):
       train_test_split(indexes,train_size=training_frac)
 
   # Method to change noise/kernel attributes, scrubs any saved model
-  def change_model(self,kernel,noise,normalise):
+  def change_model(self,kernel,noise):
     kerns = ['RBF','Matern52','Matern32','Exponential']
     if kernel not in kerns:
       raise Exception(f"Error: kernel must be one of {kerns}")
@@ -1126,10 +1134,9 @@ class GPyMC(_surrogate):
       raise Exception(f"Error: noise must be of type bool")
     self.kernel = kernel
     self.noise = noise
-    self.normalise = normalise
     self.m = None
     self.gp = None
-    self.map = None
+    self.hypers = None
 
   # Inherit set_data method and scrub train-test sets
   def set_data(self,x,y):
@@ -1140,9 +1147,8 @@ class GPyMC(_surrogate):
   def y_dist(self,mode='hist_kde',nsamps=None,return_data=False,surrogate=True):
     return super().y_dist(mode,nsamps,return_data,surrogate,self.predict)
 
-  """
   # Standard predict method which wraps the GPy predict and allows for parallelism
-  def predict(self,x,return_var=False,convert=False,revert=False):
+  def predict(self,x,return_var=False,convert=True,revert=True):
     if convert:
       xarg = np.zeros_like(x)
       for i in range(self.nx):
@@ -1150,7 +1156,7 @@ class GPyMC(_surrogate):
     else:
       xarg = copy.deepcopy(x)
     
-    y = self.__predict(self.m,xarg,return_var)
+    y = self.__predict(self.gp,self.hypers,xarg,return_var)
 
     if revert and not return_var:
       for i in range(self.ny):
@@ -1161,7 +1167,7 @@ class GPyMC(_surrogate):
     return y
 
   # Private predict method with more flexibility to act on any provided GPy model
-  def __predict(self,m,x,return_var=False):
+  def __predict(self,gp,hyps,x,return_var=False):
     if self.verbose:
       print('Predicting...')
     t0 = stopwatch()
@@ -1176,24 +1182,27 @@ class GPyMC(_surrogate):
       csizes[:crem] += 1
       cinds = np.array([np.sum(csizes[:i+1]) for i in range(chunks)])
       cinds = np.r_[0,cinds]
+      gpred = lambda x: gp.predict(x, point=hyps,  diag=True)
       outs = ray.get([_parallel_predict.remote(\
           x[cinds[i]:cinds[i+1]].reshape((csizes[i],self.nx)),\
-          m.predict) for i in range(chunks)]) # Chunks
+          gpred) for i in range(chunks)]) # Chunks
       ypreds = np.empty((0,self.ny)); yvarpreds = np.empty((0,outs[0][1].shape[1]))
       for i in range(chunks):
         ypreds = np.r_[ypreds,outs[i][0]]
         yvarpreds = np.r_[yvarpreds,outs[i][1]]
       #ray.shutdown()
     else:
-      ypreds,yvarpreds = m.predict(x)
+      with self.m:
+        ypreds, yvarpreds = gp.predict(x, point=hyps,  diag=True)
     t1 = stopwatch()
     if self.verbose:
       print(f'Time taken: {t1-t0:0.2f} s')
     if return_var:
-      return ypreds,yvarpreds
+      return ypreds.reshape((-1,1)),yvarpreds.reshape((-1,1))
     else:
-      return ypreds
+      return ypreds.reshape((-1,1))
 
+  """
   # Assess GP performance with several test plots and RMSE calcs
   def test_plots(self,restarts=10,revert=True,yplots=True,xplots=True,opt=True):
     # Creat train-test sets if none exist
