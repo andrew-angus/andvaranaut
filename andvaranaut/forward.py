@@ -20,6 +20,7 @@ import ray
 from matplotlib import ticker
 import pymc as pm
 import arviz as az
+import pytensor.tensor as pt
 
 # Latin hypercube sampler and propagator, inherits core
 class LHC(_core):
@@ -1026,13 +1027,14 @@ class GPyMC(_surrogate):
     self.__scrub_train_test()
 
   # Fit GP standard method
-  def fit(self,method='mcmc_mean',return_data=False,**kwargs):
-    self.m, self.gp, self.hypers, data = self.__fit(self.xc,self.yc,method,**kwargs)
+  def fit(self,method='mcmc_mean',return_data=False,iwgp=False,cwgp=False,**kwargs):
+    self.m, self.gp, self.hypers, data = self.__fit(self.xc,self.yc,method,\
+        iwgp,cwgp,**kwargs)
     if return_data:
       return data
 
   # More flexible private fit method which can use unconverted or train-test datasets
-  def __fit(self,x,y,method,**kwargs):
+  def __fit(self,x,y,method,iwgp,cwgp,**kwargs):
     
     # PyMC context manager
     m = pm.Model()
@@ -1043,11 +1045,17 @@ class GPyMC(_surrogate):
       #kvar = hdict[self.nx]
       if self.noise:
         #gvar = hdict[self.nx+1]
-        gvar = 1e-8 + pm.HalfNormal('gv',sigma=0.4)
+        gvar = pm.HalfNormal('gv',sigma=0.4)
       else:
         gvar = 1e-8
       kls = pm.Gamma('l',alpha=2.15,beta=6.91,shape=3)
       kvar = pm.LogNormal('kv',mu=0.0,sigma=0.4)
+
+      if iwgp:
+        iwgp = pm.LogNormal('iwgp',mu=0.0,sigma=1.0,shape=self.nx*2)
+        xin = 1 - pt.power(1-pt.power(self.xc,iwgp[0::2]),iwgp[1::2])
+      else:
+        xin = self.xc
 
       # Setup kernel
       if self.kernel == 'RBF':
@@ -1061,7 +1069,11 @@ class GPyMC(_surrogate):
 
       # GP and likelihood
       gp = pm.gp.Marginal(cov_func=kern)
-      y_ = gp.marginal_likelihood("y", X=self.xc, y=self.yc[:,0], noise=gvar)
+      if iwgp:
+        y_ = gp.marginal_likelihood("y", X=xin, y=self.yc[:,0], noise=gvar)#\
+            #+ pt.sum(self.a*self.b*np.power(x,self.a-1)*np.power(1-np.power(x,self.a),self.b-1))
+      else:
+        y_ = gp.marginal_likelihood("y", X=xin, y=self.yc[:,0], noise=gvar)
 
       # Fit
       if method == 'map':
@@ -1107,9 +1119,6 @@ class GPyMC(_surrogate):
     for i in range(self.nx):
       if isinstance(self.xconrevs[i],wgp):
         ran = len(self.xconrevs[i].params)
-        for j in range(ran):
-          if self.xconrevs[i].pos[j]:
-            x[rc+j] = np.exp(x[rc+j])
         xconrevs.append(wgp(self.xconrevs[i].warping_names,x[rc:rc+ran]\
             ,y=self.x[:,i],xdist=self.priors[i]))
         rc += ran
