@@ -964,8 +964,8 @@ class GP(_surrogate):
       xr = np.zeros_like(xc)
       for i in range(self.nx):
         xr[i] = self.xconrevs[i].rev(xc[i])
-      yr = self.target(xr)
-      yc = self.yconrevs[0].con(yr)
+      xr,yr = self._core__vector_solver(np.array([xr]))
+      yc = self.yconrevs[0].con(yr[:,0])
       return yc
 
     # Run optimisation
