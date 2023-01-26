@@ -984,6 +984,9 @@ class GP(_surrogate):
       for i in range(self.nx):
         xopt[i] = self.xconrevs[i].rev(xopt[i])
 
+    self.xopt = xopt
+    self.yopt = yopt
+
     return xopt,yopt
 
 # Inherit from surrogate class and add GP specific methods
