@@ -7,7 +7,7 @@ with open("README.md", "r") as fh:
 
 setup(
   name="andvaranaut",
-  version="0.2.0",
+  version="1.0.0",
 
   author="Andrew Angus",
   author_email="andrew.angus@warwick.ac.uk",
@@ -22,6 +22,7 @@ setup(
 
   python_requires='>=3.6',
   install_requires=[
+    "setuptools<66.0.0",
     "GPy",
     "pymc",
     "gpyopt",

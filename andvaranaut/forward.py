@@ -270,6 +270,8 @@ class GP(_surrogate):
     self.set_prior_dict(prior_dict)
     self.__scrub_train_test()
     self._xRF = None
+    self.train = None
+    self.test = None
 
   # Set prior dictionary, defaulting to lognormals on hypers
   def set_prior_dict(self,prior_dict):
@@ -886,10 +888,10 @@ class GP(_surrogate):
 
   def hyper_set(self,x):
     hypers = np.exp(x)
-    self.m.kern.lengthscale[:] = hypers[:3]
-    self.m.kern.variance = hypers[3]
+    self.m.kern.lengthscale[:] = hypers[:self.nx]
+    self.m.kern.variance = hypers[self.nx]
     if self.noise:
-      self.m.Gaussian_noise.variance = hypers[4]
+      self.m.Gaussian_noise.variance = hypers[self.nx+1]
 
   # Set output warping parameters
   def cwgp_set(self,x):
