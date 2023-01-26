@@ -17,6 +17,7 @@ from sklearn.preprocessing import QuantileTransformer, RobustScaler, PowerTransf
 import GPy
 from GPyOpt.models import GPModel
 from GPyOpt.methods import BayesianOptimization
+import pytensor.tensor as pt
 
 # Save and load with pickle
 # ToDo: Faster with cpickle 
@@ -254,12 +255,16 @@ class affine:
     return (y-self.a)/self.b
   def der(self,y):
     return self.b*np.power(y,0)
+  def conmc(self,y,rvs):
+    return rvs[0] + rvs[1]*y
 class meanstd(affine):
   def __init__(self,y):
     mean = np.mean(y)
     std = np.std(y)
     self.a = -mean/std
     self.b = 1/std
+  def conmc(self,y,rvs):
+    return self.con(y)
 class maxmin(affine):
   def __init__(self,x,centred=False,safety=0.0):
     xmin = np.min(x)*(1-safety)
@@ -272,6 +277,8 @@ class maxmin(affine):
     else:
       self.a = -xmin/xminus
       self.b = 1/xminus
+  def conmc(self,y,rvs):
+    return self.con(y)
 class uniform(affine):
   def __init__(self,dist):
     self.con = partial(std_uniform,dist=dist)
@@ -280,6 +287,8 @@ class uniform(affine):
     span = intv[1]-intv[0]
     self.a = -intv[0]/span
     self.b = 1/span
+  def conmc(self,y,rvs):
+    return self.con(y)
 class arcsinh:
   def __init__(self,a,b,c,d):
     self.a = a
@@ -359,6 +368,9 @@ class kumaraswamy:
     return np.power(1-np.power(1-x,1/self.b),1/self.a)
   def der(self,x):
     return self.a*self.b*np.power(x,self.a-1)*np.power(1-np.power(x,self.a),self.b-1)
+  def conmc(self,x,rvs):
+    #ab = pm.LogNormal(vlab,mu=0.0,sigma=1.0,shape=2)
+    return 1 - pt.power(1-pt.power(x,rvs[0]),rvs[1])
 
 
 # Composite warping class
@@ -369,7 +381,7 @@ class wgp:
     self.warping_names = warpings
     self.warpings = []
     self.params = params
-    self.pid = np.zeros(len(warpings))
+    self.pid = np.zeros(len(warpings),dtype=np.int32)
     self.pos = np.zeros(len(params),dtype=np.bool_)
     self.default_priors = []
     pc = 0
@@ -382,82 +394,71 @@ class wgp:
       if i not in allowed:
         raise Exception(f'Only {allowed} classes allowed')
       if i == 'affine':
-        self.pid[pidc] = pc
         self.warpings.append(affine(params[pc],params[pc+1]))
         self.pos[pc:pc+2] = np.array([False,True],dtype=np.bool_)
         self.default_priors.extend(self.warpings[-1].default_priors)
         pc += 2
-        pidc += 1
       elif i == 'logarithm':
-        self.pid[pidc] = pc
         self.warpings.append(logarithm())
-        pidc += 1
       elif i == 'arcsinh':
-        self.pid[pidc] = pc
         self.warpings.append(arcsinh(params[pc],params[pc+1],params[pc+2],params[pc+3]))
         self.pos[pc:pc+4] = np.array([False,True,False,False],dtype=np.bool_)
         self.default_priors.extend(self.warpings[-1].default_priors)
         pc += 4
-        pidc += 1
       elif i == 'boxcox':
-        self.pid[pidc] = pc
         self.warpings.append(boxcox(lamb=params[pc]))
         self.pos[pc:pc+1] = np.array([False],dtype=np.bool_)
         self.default_priors.extend(self.warpings[-1].default_priors)
         pc += 1
-        pidc += 1
       if i == 'sinharcsinh':
-        self.pid[pidc] = pc
         self.warpings.append(sinharcsinh(params[pc],params[pc+1]))
         self.pos[pc:pc+2] = np.array([False,True],dtype=np.bool_)
         self.default_priors.extend(self.warpings[-1].default_priors)
         pc += 2
-        pidc += 1
       elif i == 'sal':
-        self.pid[pidc] = pc
         self.warpings.append(sal(params[pc],params[pc+1],params[pc+2],params[pc+3]))
         self.pos[pc:pc+4] = np.array([False,True,False,True],dtype=np.bool_)
         self.default_priors.extend(self.warpings[-1].default_priors)
         pc += 4
-        pidc += 1
       if i == 'kumaraswamy':
-        self.pid[pidc] = pc
         self.warpings.append(kumaraswamy(params[pc],params[pc+1]))
         self.pos[pc:pc+2] = np.array([True,True],dtype=np.bool_)
         self.default_priors.extend(self.warpings[-1].default_priors)
         pc += 2
-        pidc += 1
       elif i == 'meanstd':
         if y is None:
           raise Exception('Must supply y array to use meanstd')
-        self.pid[pidc] = pc
         self.warpings.append(meanstd(yc))
-        pidc += 1
       elif i == 'boxcoxf':
         if y is None:
           raise Exception('Must supply y array to use fitted box cox')
-        self.pid[pidc] = pc
         self.warpings.append(boxcox(y=yc))
-        pidc += 1
       elif i == 'uniform':
         if xdist is None:
           raise Exception('Must supply x distribution to use uniform')
-        self.pid[pidc] = pc
         self.warpings.append(uniform(xdist))
-        pidc += 1
       elif i == 'maxmin':
         if y is None:
           raise Exception('Must supply y array to use maxmin')
-        self.pid[pidc] = pc
         self.warpings.append(maxmin(yc))
-        pidc += 1
+      self.pid[pidc] = pc
+      pidc += 1
       if y is not None:
         yc = self.warpings[-1].con(yc)
+    self.np = pc
      
   def con(self,y):
     res = y
     for i in self.warpings:
       res = i.con(res)
+    return res
+
+  def conmc(self,y,rvs):
+    res = y
+    rc = 0
+    for i,j in enumerate(self.warpings):
+      res = j.conmc(res,rvs[rc:self.pid[i]])
+      rc += self.pid[i]
     return res
 
   def rev(self,y):
