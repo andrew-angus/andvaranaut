@@ -734,6 +734,9 @@ class GP(_surrogate):
   def param_opt(self,method='restarts',restarts=10,opt_hypers=True,\
       opt_cwgp=False,opt_iwgp=False,posterior=True,**kwargs):
 
+    # Check m exists
+    if self.m is None:
+      self.m = self.__fit(self.xc,self.yc,opt=False)
     # Establish number of parameters and populate default priors if necessary
     nx = 0
     priors = []
