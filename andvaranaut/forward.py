@@ -703,8 +703,11 @@ class GP(_surrogate):
 
     # Warping term
     warp = 0
-    for i in range(self.ny):
-      warp += np.sum(np.log(self.yconrevs[i].der(self.y)))
+    try:
+      for i in range(self.ny):
+        warp += np.sum(np.log(self.yconrevs[i].der(self.y)))
+    except:
+      pass
 
     return baseLL + warp
 

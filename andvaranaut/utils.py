@@ -253,7 +253,7 @@ class affine:
   def rev(self,y):
     return (y-self.a)/self.b
   def der(self,y):
-    return self.b
+    return self.b*np.power(y,0)
 class meanstd(affine):
   def __init__(self,y):
     mean = np.mean(y)
