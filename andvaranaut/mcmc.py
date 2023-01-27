@@ -111,6 +111,38 @@ class GPyMC(_surrogate):
       else:
         xin = self.xc
 
+      # Output warping
+      if cwgp:
+        yc = self.yconrevs[0]
+        if not isinstance(yc,wgp):
+          raise Exception('Error: cwgp set to true but yconrevs class is not wgp')
+        npar = yc.np
+        if npar == 0:
+          raise Exception('Error: cwgp set to true but wgp class has no tuneable parameters')
+        rc = 0
+        rcpos = 0
+        for i in range(npar):
+          if yc.pos[i]:
+            rcpos += 1
+          else:
+            rc += 1
+        cwgpp = pm.Gamma('cwgp_pos',alpha=4.3,beta=5.3,shape=rcpos)
+        cwgp = pm.Normal('cwgp',mu=0.0,sigma=1.0,shape=rc)
+        rc = 0
+        rcpos = 0
+        rvs = []
+        for i in range(npar):
+          if yc.pos[i]:
+            rvs.append(cwgpp[rcpos])
+            rcpos += 1
+          else:
+            rvs.append(cwgp[rc])
+            rc += 1
+        print(len(rvs))
+        yin = pm.Deterministic('ycwgp',yc.conmc(self.y[:,0],rvs))
+      else:
+        yin = self.yc[:,0]
+
       # Setup kernel
       if self.kernel == 'RBF':
         kern = kvar*pm.gp.cov.ExpQuad(self.nx,ls=kls)
@@ -124,10 +156,9 @@ class GPyMC(_surrogate):
       # GP and likelihood
       gp = pm.gp.Marginal(cov_func=kern)
       if cwgp:
-        y_ = gp.marginal_likelihood("y", X=xin, y=self.yc[:,0], noise=gvar) \
-            + 1.0
+        y_ = gp.marginal_likelihood("y", X=xin, y=yin, noise=gvar)
       else:
-        y_ = gp.marginal_likelihood("y", X=xin, y=self.yc[:,0], noise=gvar)
+        y_ = gp.marginal_likelihood("y", X=xin, y=yin, noise=gvar)
 
       # Fit
       if method == 'map':

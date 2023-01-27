@@ -178,15 +178,6 @@ class nonneg:
   def __init__(self):
     self.con = nonneg_con
     self.rev = nonneg_rev
-class logarithm:
-  def __init__(self):
-    pass
-  def con(self,y):
-    return np.log(y)
-  def rev(self,y):
-    return np.exp(y)
-  def der(self,y):
-    return 1/y
 class log1p:
   def __init__(self):
     self.con = log1p_con
@@ -242,6 +233,17 @@ class powerT:
     self.pt.lambdas_[0] = np.minimum(np.maximum(-0.01,lamb),1.0)
     self.con = partial(powerT_con,pt=self.pt)
     self.rev = partial(powerT_rev,pt=self.pt)
+class logarithm:
+  def __init__(self):
+    pass
+  def con(self,y):
+    return np.log(y)
+  def rev(self,y):
+    return np.exp(y)
+  def der(self,y):
+    return 1/y
+  def conmc(self,y,rvs):
+    return pt.log(y)
 class affine:
   def __init__(self,a,b):
     self.a = a
@@ -295,33 +297,53 @@ class arcsinh:
     self.b = b
     self.c = c
     self.d = d
-    self.default_priors = [st.norm(),st.norm(),st.norm(),st.norm(loc=1)]
+    self.default_priors = [st.norm(),st.norm(),st.norm(),st.norm()]
     if not self.b > 0.0:
       raise Exception('Parameter b must be positive')
+    if not self.d > 0.0:
+      raise Exception('Parameter d must be positive')
   def con(self,y):
     return self.a + self.b*np.arcsinh((y-self.c)/self.d)
   def rev(self,y):
     return self.c + self.d*np.sinh((y-self.a)/self.b)
   def der(self,y):
     return self.b/np.sqrt(np.power(self.d,2)+np.power(y-self.c,2))
+  def conmc(self,y,rvs):
+    return rvs[0] + rvs[1]*pt.arcsinh((y-rvs[2])/rvs[3])
+# Box cox with lambad defined such that prior peak at 0 gives (almost) identity transform
 class boxcox:
-  def __init__(self,y=None,lamb=None):
-    self.pt = PowerTransformer(method='box-cox',standardize=False)
-    if lamb is None:
-      if y is None:
-        raise Exception(\
-            'Error: Must provide either an array for fitting or lambda parameter')
-      else:
-        self.pt.fit(y.reshape(-1,1))
-    else:
-      self.pt.lambdas_ = np.array([lamb])
-    self.default_priors = [st.norm(loc=1)]
+  def __init__(self,lamb):
+    self.lamb = lamb
+    self.default_priors = [st.norm(loc=0)]
   def con(self,y):
-    return self.pt.transform(y.reshape(-1,1))[:,0]
+    lambp = self.lamb + 1
+    return (np.sign(y)*np.power(np.abs(y),lambp)-1)/lambp
   def rev(self,y):
-    return self.pt.inverse_transform(y.reshape(-1,1))[:,0]
+    lambp = self.lamb + 1
+    term = y*lambp+1
+    return np.sign(term)*np.power(np.abs(term),1/lambp)
   def der(self,y):
-    return np.power(np.abs(y),self.pt.lambdas_[0]-1)
+    return np.power(np.abs(y),self.lamb)
+  def conmc(self,y,rvs):
+    lambp = rvs[0] + 1
+    return (pt.sgn(y)*pt.power(pt.abs(y),lambp)-1)/lambp
+# Box cox as above but auto fitted with scikit-learn
+class boxcoxf:
+  def __init__(self,y):
+    pt = PowerTransformer(method='box-cox',standardize=False)
+    pt.fit(y.reshape(-1,1))
+  def con(self,y):
+    lambp = self.lamb + 1
+    return (np.sign(y)*np.power(np.abs(y),lambp)-1)/lambp
+  def rev(self,y):
+    lambp = self.lamb + 1
+    term = y*lambp+1
+    return np.sign(term)*np.power(np.abs(term),1/lambp)
+  def der(self,y):
+    return np.power(np.abs(y),self.lamb)
+  def conmc(self,y,rvs):
+    lambp = self.lamb + 1
+    return (pt.sgn(y)*pt.power(pt.abs(y),lambp)-1)/lambp
 class sinharcsinh:
   def __init__(self,a,b):
     self.a = a
@@ -335,6 +357,8 @@ class sinharcsinh:
     return np.sinh((np.arcsinh(y)+self.a)/self.b)
   def der(self,y):
     return self.b*np.cosh(self.b*np.arcsinh(y)-self.a)/np.sqrt(1+np.power(y,2))
+  def conmc(self,y,rvs):
+    return pt.sinh(rvs[1]*pt.arcsinh(y)-rvs[0])
 class sal:
   def __init__(self,a,b,c,d):
     self.a = a
@@ -352,6 +376,8 @@ class sal:
     return np.sinh((np.arcsinh((y-self.a)/self.b)+self.c)/self.d)
   def der(self,y):
     return self.b*self.d*np.cosh(self.d*np.arcsinh(y)-self.c)/np.sqrt(1+np.power(y,2))
+  def conmc(self,y,rvs):
+    return rvs[0] + rvs[1]*pt.sinh(rvs[3]*pt.arcsinh(y)-rvs[2])
 # Input warping with kumaraswamy distribution
 class kumaraswamy:
   def __init__(self,a,b):
@@ -369,7 +395,6 @@ class kumaraswamy:
   def der(self,x):
     return self.a*self.b*np.power(x,self.a-1)*np.power(1-np.power(x,self.a),self.b-1)
   def conmc(self,x,rvs):
-    #ab = pm.LogNormal(vlab,mu=0.0,sigma=1.0,shape=2)
     return 1 - pt.power(1-pt.power(x,rvs[0]),rvs[1])
 
 
@@ -402,7 +427,7 @@ class wgp:
         self.warpings.append(logarithm())
       elif i == 'arcsinh':
         self.warpings.append(arcsinh(params[pc],params[pc+1],params[pc+2],params[pc+3]))
-        self.pos[pc:pc+4] = np.array([False,True,False,False],dtype=np.bool_)
+        self.pos[pc:pc+4] = np.array([False,True,False,True],dtype=np.bool_)
         self.default_priors.extend(self.warpings[-1].default_priors)
         pc += 4
       elif i == 'boxcox':
@@ -432,7 +457,7 @@ class wgp:
       elif i == 'boxcoxf':
         if y is None:
           raise Exception('Must supply y array to use fitted box cox')
-        self.warpings.append(boxcox(y=yc))
+        self.warpings.append(boxcoxf(y=yc))
       elif i == 'uniform':
         if xdist is None:
           raise Exception('Must supply x distribution to use uniform')
@@ -453,14 +478,6 @@ class wgp:
       res = i.con(res)
     return res
 
-  def conmc(self,y,rvs):
-    res = y
-    rc = 0
-    for i,j in enumerate(self.warpings):
-      res = j.conmc(res,rvs[rc:self.pid[i]])
-      rc += self.pid[i]
-    return res
-
   def rev(self,y):
     res = y
     for i in reversed(self.warpings):
@@ -473,6 +490,15 @@ class wgp:
     for i in self.warpings:
       res *= i.der(x)
       x[:,0] = i.con(x[:,0])
+    return res
+
+  def conmc(self,y,rvs):
+    res = y
+    rc = 0
+    for i,j in enumerate(self.warpings):
+      print(rc,self.pid[i])
+      res = j.conmc(res,rvs[rc:self.pid[i]])
+      rc += (self.pid[i]-rc)
     return res
 
 # Core class which runs target function
