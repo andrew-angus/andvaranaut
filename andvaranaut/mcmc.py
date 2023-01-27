@@ -52,9 +52,6 @@ class GPyMC(_surrogate):
       super().sample(nsamps,seed)
     else:
       raise Exception('No other method implemented, choose LHC')
-      #if self.x.shape[0] < 2:
-        #  raise Exception("Error: require at least 2 LHC samples to perform adaptive sampling.")
-      #self.__adaptive_sample(nsamps,batchsize,restarts,opt_method,opt_restarts)
 
   # Inherit del_samples and extend to remove test-train datasets
   def del_samples(self,ndels=None,method='coarse_lhc',idx=None):
@@ -62,29 +59,24 @@ class GPyMC(_surrogate):
     self.__scrub_train_test()
 
   # Fit GP standard method
-  def fit(self,method='mcmc_mean',return_data=False,iwgp=False,cwgp=False,**kwargs):
+  def fit(self,method='mcmc_mean',return_data=False,iwgp=False,**kwargs):
     self.m, self.gp, self.hypers, data = self.__fit(self.xc,self.yc,method,\
-        iwgp,cwgp,**kwargs)
+        iwgp,**kwargs)
     if return_data:
       return data
 
   # More flexible private fit method which can use unconverted or train-test datasets
-  def __fit(self,x,y,method,iwgp,cwgp,**kwargs):
+  def __fit(self,x,y,method,iwgp,**kwargs):
     
     # PyMC context manager
     m = pm.Model()
     with m:
-      # Priors on hyperparameters
-      #hdict = self.prior_dict['hypers']
-      #kls = [hdict[i].pm for i in range(self.nx)]
-      #kvar = hdict[self.nx]
+      # Priors on GP hyperparameters
       if self.noise:
-        #gvar = hdict[self.nx+1]
         gvar = pm.HalfNormal('gv',sigma=0.4)
       else:
         gvar = 1e-8
       kls = pm.Gamma('l',alpha=2.15,beta=6.91,shape=3)
-      #kvar = pm.LogNormal('kv',mu=0.0,sigma=0.4)
       kvar = pm.Gamma('kv',alpha=4.3,beta=5.3)
 
       # Input warping
@@ -111,38 +103,6 @@ class GPyMC(_surrogate):
       else:
         xin = self.xc
 
-      # Output warping
-      if cwgp:
-        yc = self.yconrevs[0]
-        if not isinstance(yc,wgp):
-          raise Exception('Error: cwgp set to true but yconrevs class is not wgp')
-        npar = yc.np
-        if npar == 0:
-          raise Exception('Error: cwgp set to true but wgp class has no tuneable parameters')
-        rc = 0
-        rcpos = 0
-        for i in range(npar):
-          if yc.pos[i]:
-            rcpos += 1
-          else:
-            rc += 1
-        cwgpp = pm.Gamma('cwgp_pos',alpha=4.3,beta=5.3,shape=rcpos)
-        cwgp = pm.Normal('cwgp',mu=0.0,sigma=1.0,shape=rc)
-        rc = 0
-        rcpos = 0
-        rvs = []
-        for i in range(npar):
-          if yc.pos[i]:
-            rvs.append(cwgpp[rcpos])
-            rcpos += 1
-          else:
-            rvs.append(cwgp[rc])
-            rc += 1
-        print(len(rvs))
-        yin = pm.Deterministic('ycwgp',yc.conmc(self.y[:,0],rvs))
-      else:
-        yin = self.yc[:,0]
-
       # Setup kernel
       if self.kernel == 'RBF':
         kern = kvar*pm.gp.cov.ExpQuad(self.nx,ls=kls)
@@ -155,40 +115,53 @@ class GPyMC(_surrogate):
 
       # GP and likelihood
       gp = pm.gp.Marginal(cov_func=kern)
-      if cwgp:
-        y_ = gp.marginal_likelihood("y", X=xin, y=yin, noise=gvar)
-      else:
-        y_ = gp.marginal_likelihood("y", X=xin, y=yin, noise=gvar)
+      y_ = gp.marginal_likelihood("y", X=xin, y=self.yc[:,0], noise=gvar)
 
-      # Fit
+      # Fit and process results depending on method
       if method == 'map':
         data = pm.find_MAP(**kwargs)
         mp = copy.deepcopy(data)
       else:
         data = pm.sample(**kwargs)
         if method == 'mcmc_mean':
-          mean = data.posterior.mean(dim=["chain", "draw"])
-          mp = {}
-          for key in mean:
-            if len(mean[key].values.shape) > 1:
-              mp[key] = mean[key].values
-            else:
-              mp[key] = np.array(mean[key].values)
+          mp = self.mean_extract(data)
+        elif method == 'mcmc_map':
+          mp = self.map_extract(data)
         else:
-          pos = data.posterior.stack(draws=("chain", "draw"))
-          ss = data.sample_stats.stack(draws=("chain", "draw"))
-          lpmax = np.max(ss['lp'].values)
-          if self.verbose:
-            print(f'Max log posterior: {lpmax}')
-          lpamax = np.argmax(ss['lp'].values)
-          mp = {}
-          for key in pos:
-            if len(pos[key].values.shape) > 1:
-              mp[key] = pos[key].values[:,lpamax]
-            else:
-              mp[key] = np.array(pos[key].values[lpamax])
+          raise Exception('method must be one of map, mcmc_map, or mcmc_mean')
+
+      # Input warping update
+      if iwgp:
+        self.iwgp_set(mp['iwgp'])
 
     return m, gp, mp, data
+
+  # Extract hyperparameter dictionary from means of mcmc data
+  def mean_extract(self,data):
+    mean = data.posterior.mean(dim=["chain", "draw"])
+    mp = {}
+    for key in mean:
+      if len(mean[key].values.shape) > 1:
+        mp[key] = mean[key].values
+      else:
+        mp[key] = np.array(mean[key].values)
+    return mp
+
+  # Extract hyperparameter dictionary from means of mcmc data
+  def map_extract(self,data):
+    pos = data.posterior.stack(draws=("chain", "draw"))
+    ss = data.sample_stats.stack(draws=("chain", "draw"))
+    lpmax = np.max(ss['lp'].values)
+    if self.verbose:
+      print(f'Max log posterior: {lpmax}')
+    lpamax = np.argmax(ss['lp'].values)
+    mp = {}
+    for key in pos:
+      if len(pos[key].values.shape) > 1:
+        mp[key] = pos[key].values[:,lpamax]
+      else:
+        mp[key] = np.array(pos[key].values[lpamax])
+    return mp
 
   # Set output warping parameters
   def cwgp_set(self,x):
@@ -213,8 +186,6 @@ class GPyMC(_surrogate):
 
   # Make train-test split and populate attributes
   def train_test(self,training_frac=0.9):
-    #self.xtrain,self.xtest,self.ytrain,self.ytest = \
-    #  train_test_split(self.xc,self.yc,train_size=training_frac)
     indexes = np.arange(len(self.x))
     self.train,self.test = \
       train_test_split(indexes,train_size=training_frac)
@@ -399,220 +370,6 @@ class GPyMC(_surrogate):
     pg.target = None
     pg.constraints = None
     save_object(pg,fname)
-
-  def model_likelihood(self):
-    # Base log likelihood from GPy
-    baseLL = self.m.log_likelihood()
-
-    # Warping term
-    warp = 0
-    for i in range(self.ny):
-      warp += np.sum(np.log(self.yconrevs[i].der(self.y)))
-
-    return baseLL + warp
-
-  # Model posterior with prior distribution dict passed as argument
-  def model_posterior(self):
-    LL = self.model_likelihood()
-    pri = 0
-    if 'hypers' in self.prior_dict:
-      for i,j in enumerate(self.prior_dict['hypers']):
-        if j is not None:
-          if i < 3:
-            pri += j.logpdf(np.log(self.m.kern.lengthscale[i]))
-          elif i == 3:
-            pri += j.logpdf(np.log(self.m.kern.variance[0]))
-          else:
-            pri += j.logpdf(np.log(self.m.Gaussian_noise.variance[0]))
-    if 'cwgp' in self.prior_dict:
-      for i,j in enumerate(self.prior_dict['cwgp']):
-        if self.yconrevs[0].pos[i]:
-          pri += j.logpdf(np.log(self.yconrevs[0].params[i]))
-        else:
-          pri += j.logpdf(self.yconrevs[0].params[i])
-
-    return LL + pri
-
-  # Method for optimising parameters
-  def param_opt(self,method='restarts',restarts=10,opt_hypers=True,\
-      opt_cwgp=False,opt_iwgp=False,posterior=True,**kwargs):
-
-    # Establish number of parameters and populate default priors if necessary
-    nx = 0
-    priors = []
-    splits = []
-    if opt_hypers:
-      priors.extend(self.prior_dict['hypers'])
-      if self.noise:
-        num = 5
-      else:
-        num = 4
-      nx += num
-      splits.append(nx)
-    if opt_cwgp:
-      if 'cwgp' not in self.prior_dict:
-        self.prior_dict['cwgp'] = self.yconrevs[0].default_priors
-      npar = len(self.yconrevs[0].params) 
-      priors.extend(self.prior_dict['cwgp'])
-      nx += npar
-      splits.append(nx)
-    if opt_iwgp:
-      if 'iwgp' not in self.prior_dict:
-        self.prior_dict['iwgp'] = []
-        npar = 0
-        for i in range(self.nx):
-          if isinstance(self.xconrevs[i],wgp):
-            self.prior_dict['iwgp'].extend(self.xconrevs[i].default_priors)
-            npar += 2
-      else:
-        npar = len(self.prior_dict['iwgp'])
-      priors.extend(self.prior_dict['iwgp'])
-      nx += npar
-      splits.append(nx)
-
-    if self.verbose:
-      print(f'Optimising {nx} parameters...')
-
-    # Setup objective function
-    if opt_iwgp and opt_cwgp and opt_hypers:
-      if posterior:
-        obj_fun = partial(self.__param_opt_phic,splits=splits)
-      else:
-        obj_fun = partial(self.__param_opt_lhic,splits=splits)
-    elif opt_cwgp and opt_hypers:
-      if posterior:
-        obj_fun = partial(self.__param_opt_phc,splits=splits)
-      else:
-        obj_fun = partial(self.__param_opt_lhc,splits=splits)
-    elif opt_iwgp and opt_hypers:
-      if posterior:
-        obj_fun = partial(self.__param_opt_phi,splits=splits)
-      else:
-        obj_fun = partial(self.__param_opt_lhi,splits=splits)
-    elif opt_iwgp and opt_cwgp:
-      if posterior:
-        obj_fun = partial(self.__param_opt_pic,splits=splits)
-      else:
-        obj_fun = partial(self.__param_opt_lic,splits=splits)
-    elif opt_cwgp:
-      if posterior:
-        obj_fun = self.__param_opt_pc
-      else:
-        obj_fun = self.__param_opt_lc
-    elif opt_hypers:
-      if posterior:
-        obj_fun = self.__param_opt_ph
-      else:
-        obj_fun = self.__param_opt_lh
-    elif opt_iwgp:
-      if posterior:
-        obj_fun = self.__param_opt_pi
-      else:
-        obj_fun = self.__param_opt_li
-
-    # Call optimisation method
-    res = self._core__opt(obj_fun,method,nx,\
-        nonself=True,priors=priors,restarts=restarts,**kwargs)
-
-    # Ensure opt used
-    obj_fun(res.x)
-
-  def __param_opt_lhc(self,x,splits):
-    self.hyper_set(x[:splits[0]])
-    self.cwgp_set(x[splits[0]:])
-    return -self.model_likelihood()
-
-  def __param_opt_phc(self,x,splits):
-    self.hyper_set(x[:splits[0]])
-    self.cwgp_set(x[splits[0]:])
-    return -self.model_posterior()
-
-  def __param_opt_lh(self,x):
-    self.hyper_set(x)
-    return -self.model_likelihood()
-
-  def __param_opt_ph(self,x):
-    self.hyper_set(x)
-    return -self.model_posterior()
-
-  def __param_opt_lc(self,x):
-    self.cwgp_set(x)
-    self.fit(2)
-    return -self.model_likelihood()
-
-  def __param_opt_pc(self,x):
-    self.cwgp_set(x)
-    self.fit(2)
-    return -self.model_posterior()
-
-  def __param_opt_li(self,x):
-    self.iwgp_set(x)
-    self.fit(2)
-    return -self.model_likelihood()
-
-  def __param_opt_pi(self,x):
-    self.iwgp_set(x)
-    self.fit(2)
-    return -self.model_posterior()
-
-  def __param_opt_lic(self,x,splits):
-    self.cwgp_set(x[:splits[0]])
-    self.iwgp_set(x[splits[0]:])
-    self.fit(2)
-    return -self.model_likelihood()
-
-  def __param_opt_pic(self,x,splits):
-    self.cwgp_set(x[:splits[0]])
-    self.iwgp_set(x[splits[0]:])
-    self.fit(2)
-    return -self.model_posterior()
-
-  def __param_opt_lhi(self,x,splits):
-    self.hyper_set(x[:splits[0]])
-    self.iwgp_set(x[splits[0]:])
-    return -self.model_likelihood()
-
-  def __param_opt_phi(self,x,splits):
-    self.hyper_set(x[:splits[0]])
-    self.iwgp_set(x[splits[0]:])
-    return -self.model_posterior()
-
-  def __param_opt_lhic(self,x,splits):
-    self.hyper_set(x[:splits[0]])
-    self.cwgp_set(x[splits[0]:splits[1]])
-    self.iwgp_set(x[splits[1]:])
-    return -self.model_likelihood()
-
-  def __param_opt_phic(self,x,splits):
-    self.hyper_set(x[:splits[0]])
-    self.cwgp_set(x[splits[0]:splits[1]])
-    self.iwgp_set(x[splits[1]:])
-    return -self.model_posterior()
-
-  def hyper_set(self,x):
-    hypers = np.exp(x)
-    self.m.kern.lengthscale[:] = hypers[:3]
-    self.m.kern.variance = hypers[3]
-    if self.noise:
-      self.m.Gaussian_noise.variance = hypers[4]
-    
-  # Modified conversion class change method
-  def change_conrevs(self,xconrevs=None,yconrevs=None):
-    super().change_conrevs(xconrevs=xconrevs,yconrevs=yconrevs)
-    if self.m is not None:
-      self.m.set_XY(self.xc,self.yc)
-
-  # Modified conversion class change method
-  def change_xconrevs(self,xconrevs=None):
-    super().change_xconrevs(xconrevs=xconrevs)
-    if self.m is not None:
-      self.m.set_X(self.xc)
-
-  # Modified conversion class change method
-  def change_yconrevs(self,yconrevs=None):
-    super().change_yconrevs(yconrevs=yconrevs)
-    if self.m is not None:
-      self.m.set_Y(self.yc)
 
   # Minimise output variable using GPyOpt 
   def bayesian_minimisation(self,max_iter=15,minmax=False,restarts=5,revert=True):

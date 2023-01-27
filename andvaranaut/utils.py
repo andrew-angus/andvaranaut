@@ -496,7 +496,6 @@ class wgp:
     res = y
     rc = 0
     for i,j in enumerate(self.warpings):
-      print(rc,self.pid[i])
       res = j.conmc(res,rvs[rc:self.pid[i]])
       rc += (self.pid[i]-rc)
     return res
