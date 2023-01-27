@@ -90,27 +90,24 @@ class GPyMC(_surrogate):
       # Input warping
       if iwgp:
         rc = 0
-        iws = []
         for i in range(self.nx):
           if isinstance(self.xconrevs[i],wgp):
             rc += self.xconrevs[i].np
-            iws.append(self.xconrevs[i])
-        if len(iws) != 0:
-          x1 = []
-          #iwgp = pm.LogNormal('iwgp',mu=0.0,sigma=1.0,shape=rc)
-          iwgp = pm.Gamma('iwgp',alpha=4.3,beta=5.3,shape=rc)
-          rc = 0
-          for i,j in enumerate(iws):
-            rvs = [iwgp[k] for k in range(rc,rc+j.np)]
-            x1.append(j.conmc(self.x[:,i],rvs))
-            rc += j.np
-          if len(iws) > 1:
-            xin = pt.stack(x1,axis=1)
+        iwgp = pm.Gamma('iwgp',alpha=4.3,beta=5.3,shape=rc)
+        rc = 0
+        x1 = []
+        check = True
+        for i in range(self.nx):
+          if isinstance(self.xconrevs[i],wgp):
+            check = False
+            rvs = [iwgp[k] for k in range(rc,rc+self.xconrevs[i].np)]
+            x1.append(self.xconrevs[i].conmc(self.x[:,i],rvs))
+            rc += self.xconrevs[i].np
           else:
-            xin = pt.array([x1]).T
-        else:
-          print('note: iwgp set to true but none of xconrevs are wgp classes')
-        #xin = 1 - pt.power(1-pt.power(self.xc,iwgp[0::2]),iwgp[1::2])
+            x1.append(self.xc[:,i])
+          xin = pt.stack(x1,axis=1)
+        if check:
+          raise Exception('Error: iwgp set to true but none of xconrevs are wgp classes')
       else:
         xin = self.xc
 
