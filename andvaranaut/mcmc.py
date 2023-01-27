@@ -163,12 +163,77 @@ class GPyMC(_surrogate):
         mp[key] = np.array(pos[key].values[lpamax])
     return mp
 
+  # Use modified Gaussian likelihood to fit cwgp parameters
+  def y_warp(self,method='mcmc_map',return_data=True,**kwargs):
+
+    # PyMC context manager
+    m = pm.Model()
+    with m:
+
+      # Output warping
+      yc = self.yconrevs[0]
+      if not isinstance(yc,wgp):
+        raise Exception('Error: cwgp set to true but yconrevs class is not wgp')
+      npar = yc.np
+      if npar == 0:
+        raise Exception('Error: cwgp set to true but wgp class has no tuneable parameters')
+      rc = 0
+      rcpos = 0
+      for i in range(npar):
+        if yc.pos[i]:
+          rcpos += 1
+        else:
+          rc += 1
+      cwgpp = pm.Gamma('cwgp_pos',alpha=4.3,beta=5.3,shape=rcpos)
+      cwgp = pm.Normal('cwgp',mu=0.0,sigma=1.0,shape=rc)
+      rc = 0
+      rcpos = 0
+      rvs = []
+      for i in range(npar):
+        if yc.pos[i]:
+          rvs.append(cwgpp[rcpos])
+          rcpos += 1
+        else:
+          rvs.append(cwgp[rc])
+          rc += 1
+      yin = yc.conmc(self.y[:,0],rvs)
+
+      # GP and likelihood
+      y_ = pm.Normal('yobs',mu=yin,sigma=1.0,observed=np.zeros(len(self.y))) \
+        + pt.log(pt.exp(yin))
+
+      # Fit and process results depending on method
+      if method == 'map':
+        data = pm.find_MAP(**kwargs)
+        mp = copy.deepcopy(data)
+      else:
+        data = pm.sample(**kwargs)
+        if method == 'mcmc_mean':
+          mp = self.mean_extract(data)
+        elif method == 'mcmc_map':
+          mp = self.map_extract(data)
+        else:
+          raise Exception('method must be one of map, mcmc_map, or mcmc_mean')
+
+      # Output warping update
+      rc = 0
+      rcpos = 0
+      params = []
+      for i in range(npar):
+        if yc.pos[i]:
+          params.append(mp['cwgp_pos'][rcpos])
+          rcpos += 1
+        else:
+          params.append(mp['cwgp'][rc])
+          rc += 1
+      self.cwgp_set(np.array(params))
+
+    return mp, data
+
+
   # Set output warping parameters
   def cwgp_set(self,x):
-    for i in range(len(x)):
-      if self.yconrevs[0].pos[i]:
-        x[i] = np.exp(x[i])
-    self.change_yconrevs(yconrevs=[wgp(self.yconrevs[0].warping_names,x,self.y)])
+    self.change_yconrevs([wgp(self.yconrevs[0].warping_names,x,self.y)])
 
   # Set input warping parameters
   def iwgp_set(self,x):
