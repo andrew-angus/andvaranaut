@@ -1,7 +1,7 @@
 #!/bin/python3
 
-from andvaranaut.utils import _core
-from andvaranaut.forward import GP
+from andvaranaut.core import _core
+from andvaranaut.gp import GP
 import numpy as np
 from scipy.optimize import differential_evolution, Bounds
 import scipy.stats as st
@@ -246,13 +246,3 @@ class GPMAP(MAP,GP):
       print(f'Optimal model parameters are: {res.x}')
       print(f'Posterior is: {-res.fun:0.3f}')
       print(f'Time taken: {t1-t0:0.1f} s')
-
-# MCMC class inheriting from MAP
-class MCMC(MAP):
-  def __init__(self,**kwargs):
-    super().__init__(**kwargs)
-
-# GP-MCMC class inheriting from mcmc
-class GPMCMC(GPMAP,MCMC):
-  def __init__(self,gp,nx_exp,nx_model,**kwargs):
-    super().__init__(**kwargs)

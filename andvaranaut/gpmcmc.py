@@ -9,15 +9,16 @@ import os
 import copy
 from sklearn.model_selection import train_test_split
 from functools import partial
-from andvaranaut.utils import _core,cdf,save_object,wgp
-from andvaranaut.forward import _surrogate
+from andvaranaut.core import _core,save_object
+from andvaranaut.lhc import _surrogate
+from andvaranaut.transform import wgp
 import ray
 import pymc as pm
 import arviz as az
 import pytensor.tensor as pt
 
 # Inherit from surrogate class and add GP specific methods
-class GPyMC(_surrogate):
+class GPMCMC(_surrogate):
   def __init__(self,kernel='RBF',noise=True,prior_dict=None,**kwargs):
     super().__init__(**kwargs)
     self.change_model(kernel,noise)
