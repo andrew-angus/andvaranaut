@@ -76,9 +76,8 @@ class GP(_surrogate):
       self.fit(restarts)
 
       # Keep hyperparameters and evaluate ESE_loo for each data point
-      csamps = len(self.x)
-      eseloo = np.zeros((csamps,self.ny))
-      for j in range(csamps):
+      eseloo = np.zeros((self.nsamp,self.ny))
+      for j in range(self.nsamp):
 
         # Delete single sample
         x_loo = np.delete(self.xc,j,axis=0)
@@ -163,10 +162,12 @@ class GP(_surrogate):
       self.verbose = verbose
       self.x = np.r_[self.x,xsamps]
       self.y = np.r_[self.y,ysamps]
+      self.nsamp = len(self.x)
       self._surrogate__con(newsamps)
       if self.verbose:
         print('Sample:',xsamps)
         print(f'{(i+1)/batches:0.1%} complete.',end='\r')
+      
     t1 = stopwatch()
     if self.verbose:
       print(f'Time taken: {t1-t0:0.2f} s')
@@ -326,7 +327,7 @@ class GP(_surrogate):
   def train_test(self,training_frac=0.9):
     #self.xtrain,self.xtest,self.ytrain,self.ytest = \
     #  train_test_split(self.xc,self.yc,train_size=training_frac)
-    indexes = np.arange(len(self.x))
+    indexes = np.arange(self.nsamp)
     self.train,self.test = \
       train_test_split(indexes,train_size=training_frac)
 
@@ -729,6 +730,12 @@ class GP(_surrogate):
         xr[i] = self.xconrevs[i].rev(xc[i])
       xr,yr = self._core__vector_solver(np.array([xr]))
       yc = self.yconrevs[0].con(yr[:,0])
+      # Update database with new BO samples
+      self.x = np.r_[self.x,xr]
+      self.y = np.r_[self.y,yr]
+      self.xc = np.r_[self.xc,np.array([xc])]
+      self.yc = np.r_[self.yc,np.array([yc])]
+      self.nsamp = len(self.x)
       return yc
 
     # Run optimisation

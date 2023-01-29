@@ -71,6 +71,7 @@ class _core():
     self.constraints = constraints # List of constraint functions for sampler
     self.verbose = verbose
     self.rundir = 'runs'
+    self.nsamp = 0
     if rundir is not None:
       self.rundir = rundir
 
@@ -83,7 +84,7 @@ class _core():
     if not ray.is_initialized():
       ray.init(num_cpus=self.nproc)
     l = len(inps)
-    all_ids = [_parallel_wrap.remote(self.target,self.rundir,inps[i],i) for i in range(l)]
+    all_ids = [_parallel_wrap.remote(self.target,self.rundir,inps[i],i+self.nsamp) for i in range(l)]
 
     # Get ids as they complete or fail, give warning on fail
     outs = []; fails = np.empty(0,dtype=np.intc)
@@ -134,7 +135,7 @@ class _core():
       ysamps = np.empty((0,self.ny))
       fails = np.empty(0,dtype=np.intc)
       for i in range(n_samples):
-        d = os.path.join(self.rundir, f'task{i}')
+        d = os.path.join(self.rundir, f'task{i+self.nsamp}')
         if not os.path.isdir(d):
           os.system(f'mkdir {d}')
         os.chdir(d)

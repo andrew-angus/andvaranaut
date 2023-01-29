@@ -34,6 +34,7 @@ class LHC(_core):
     # Add new evaluations to original data arrays
     self.x = np.r_[self.x,xsamps]
     self.y = np.r_[self.y,ysamps]
+    self.nsamp = len(self.x)
 
   # Produce latin hypercube samples from input distributions
   def __latin_sample(self,nsamps,seed=None,improved=True):
@@ -52,6 +53,7 @@ class LHC(_core):
   # Delete n samples by selected method
   def del_samples(self,ndels=None,method='coarse_lhc',idx=None):
     self.__del_samples(ndels,method,idx,returns=False)
+    self.nsamp = len(self.x)
 
   # Private method with more flexibility for extension in child classes
   def __del_samples(self,ndels,method,idx,returns):
@@ -62,9 +64,8 @@ class LHC(_core):
       xsamps = self.__latin_sample(ndels)
       dmins = np.zeros(ndels,dtype=np.intc)
       for i in range(ndels):
-        lenx = len(self.x)
-        dis = np.zeros(lenx)
-        for j in range(lenx):
+        dis = np.zeros(self.nsamp-i)
+        for j in range(self.nsamp-i):
           dis[j] = np.linalg.norm(self.x[j]-xsamps[i])
         dmins[i] = np.argmin(dis)
         self.x = np.delete(self.x,dmins[i],axis=0)
@@ -75,9 +76,8 @@ class LHC(_core):
     elif method == 'random':
       if not isinstance(ndels,int) or ndels < 1:
         raise Exception("Error: must specify positive int for ndels")
-      current = len(self.x)
-      left = current-ndels
-      a = np.arange(0,current)
+      left = self.nsamp-ndels
+      a = np.arange(0,self.nsamp)
       inds = np.random.choice(a,size=left,replace=False)
       self.x = self.x[inds,:]
       self.y = self.y[inds,:]
@@ -87,7 +87,7 @@ class LHC(_core):
     elif method == 'specific':
       if not isinstance(idx,(int,list)):
         raise Exception("Error: must specify int or list of ints for idx")
-      mask = np.ones(len(self.x), dtype=bool)
+      mask = np.ones(self.nsamp, dtype=bool)
       mask[idx] = False
       self.x = self.x[mask]
       self.y = self.y[mask]
@@ -132,6 +132,7 @@ class LHC(_core):
             "Error: provided x data must fit within provided input distribution ranges.")
     self.x = x
     self.y = y
+    self.nsamp = len(x)
 
 # Inherit from LHC class and add data conversion methods
 class _surrogate(LHC):
@@ -222,7 +223,7 @@ class _surrogate(LHC):
     super().set_data(x,y)
     self.xc = np.empty((0,self.nx))
     self.yc = np.empty((0,self.ny))
-    self.__con(len(x))
+    self.__con(self.nsamp)
 
   # Inherit and extend y_dist to have dist by surrogate predictions
   def y_dist(self,mode='hist_kde',nsamps=None,return_data=False,surrogate=True,predictfun=None):

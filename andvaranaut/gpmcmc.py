@@ -200,8 +200,7 @@ class GPMCMC(_surrogate):
       yin = yc.conmc(self.y[:,0],rvs)
 
       # GP and likelihood
-      y_ = pm.Normal('yobs',mu=yin,sigma=1.0,observed=np.zeros(len(self.y))) \
-        + pt.log(pt.exp(yin))
+      y_ = pm.Normal('yobs',mu=yin,sigma=1.0,observed=np.zeros(self.nsamp)) 
 
       # Fit and process results depending on method
       if method == 'map':
@@ -252,7 +251,7 @@ class GPMCMC(_surrogate):
 
   # Make train-test split and populate attributes
   def train_test(self,training_frac=0.9):
-    indexes = np.arange(len(self.x))
+    indexes = np.arange(self.nsamp)
     self.train,self.test = \
       train_test_split(indexes,train_size=training_frac)
 
