@@ -313,7 +313,7 @@ class _core():
         bogp = GPModel(kernel=kern,exact_feval=not self.noise,\
             optimize_restarts=restarts,verbose=False,ARD=True)
         bopt = BayesianOptimization(f=fun_wrap,domain=domain,\
-            X=self.xc,Y=self.yc,normalize_Y=self.normalise,\
+            X=self.xc,Y=self.yc,normalize_Y=True,\
             exact_feval=not self.noise,verbosity=False,\
             initial_design_numdata=0,model=bogp)
       else:
