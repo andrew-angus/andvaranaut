@@ -739,17 +739,23 @@ class GP(_surrogate):
       return yc
 
     # Run optimisation
-    res = self._core__opt(target_transform,'BO',self.nx,restarts,\
-        bounds=bnds,max_iter=max_iter)
+    try:
+      res = self._core__opt(target_transform,'BO',self.nx,restarts,\
+          bounds=bnds,max_iter=max_iter)
+      xopt = res.x
+      yopt = res.fun
 
-    xopt = res.x
-    yopt = res.fun
+      # Revert to original data
+      if revert:
+        yopt = self.yconrevs[0].rev(yopt)
+        for i in range(self.nx):
+          xopt[i] = self.xconrevs[i].rev(xopt[i])
 
-    # Revert to original data
-    if revert:
-      yopt = self.yconrevs[0].rev(yopt)
-      for i in range(self.nx):
-        xopt[i] = self.xconrevs[i].rev(xopt[i])
+    except:
+      print('Warning: Bayesian minimisation failed, choosing best sample in dataset')
+      yopt = np.min(self.y)
+      xopt = self.x[np.argmin(self.y[:,0]),:]
+
 
     self.xopt = xopt
     self.yopt = yopt
