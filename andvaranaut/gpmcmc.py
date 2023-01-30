@@ -16,6 +16,7 @@ import ray
 import pymc as pm
 import arviz as az
 import pytensor.tensor as pt
+from scipy.optimize import Bounds
 
 # Inherit from surrogate class and add GP specific methods
 class GPMCMC(_surrogate):
@@ -331,6 +332,69 @@ class GPMCMC(_surrogate):
       return ypreds.reshape((-1,1)),yvarpreds.reshape((-1,1))
     else:
       return ypreds.reshape((-1,1))
+
+  # Minimise output variable using GPyOpt 
+  def bayesian_minimisation(self,max_iter=15,minmax=False,restarts=5,revert=True):
+
+    if self.ny > 1:
+      raise Exception('Bayesian minimisation only implemented for single output')
+
+    if self.verbose:
+      print('Running Bayesian minimisation...')
+    
+    # Setup domain as list of dictionaries for each variable
+    lbs = np.zeros(self.nx)
+    ubs = np.zeros(self.nx)
+    tiny = np.finfo(np.float64).tiny
+    for i in range(self.nx):
+      if minmax:
+        lbs[i] = np.min(self.xc[:,i])
+        ubs[i] = np.max(self.xc[:,i])
+      else:
+        lbs[i] = self.xconrevs[i].con(self.priors[i].ppf(tiny))
+        ubs[i] = self.xconrevs[i].con(self.priors[i].isf(tiny))
+    bnds = Bounds(lb=lbs,ub=ubs)
+
+    ## TODO: Constraint setup
+    
+    # Setup objective function which is target plus conversion/reversion
+    def target_transform(xc):
+      xr = np.zeros_like(xc)
+      for i in range(self.nx):
+        xr[i] = self.xconrevs[i].rev(xc[i])
+      xr,yr = self._core__vector_solver(np.array([xr]))
+      yc = self.yconrevs[0].con(yr[:,0])
+      # Update database with new BO samples
+      self.x = np.r_[self.x,xr]
+      self.y = np.r_[self.y,yr]
+      self.xc = np.r_[self.xc,np.array([xc])]
+      self.yc = np.r_[self.yc,np.array([yc])]
+      self.nsamp = len(self.x)
+      return yc
+
+    # Run optimisation
+    try:
+      res = self._core__opt(target_transform,'BO',self.nx,restarts,\
+          bounds=bnds,max_iter=max_iter)
+      xopt = res.x
+      yopt = res.fun
+
+      # Revert to original data
+      if revert:
+        yopt = self.yconrevs[0].rev(yopt)
+        for i in range(self.nx):
+          xopt[i] = self.xconrevs[i].rev(xopt[i])
+
+    except:
+      print('Warning: Bayesian minimisation failed, choosing best sample in dataset')
+      yopt = np.min(self.y)
+      xopt = self.x[np.argmin(self.y[:,0]),:]
+
+
+    self.xopt = xopt
+    self.yopt = yopt
+
+    return xopt,yopt
 
   """
   # Assess GP performance with several test plots and RMSE calcs
