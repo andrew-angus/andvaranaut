@@ -168,6 +168,12 @@ class GPMCMC(_surrogate):
   # Use modified Gaussian likelihood to fit cwgp parameters
   def y_warp(self,method='mcmc_map',return_data=True,**kwargs):
 
+    # Precalcs
+    stdnorm = st.norm()
+    ccdf = np.linspace(0,1,self.nsamp+2)[1:-1]
+    ycdf = stdnorm.ppf(ccdf)
+    ysort = np.sort(self.y[:,0])
+
     # PyMC context manager
     m = pm.Model()
     with m:
@@ -186,8 +192,10 @@ class GPMCMC(_surrogate):
           rcpos += 1
         else:
           rc += 1
-      cwgpp = pm.Gamma('cwgp_pos',alpha=4.3,beta=5.3,shape=rcpos)
-      cwgp = pm.Normal('cwgp',mu=0.0,sigma=1.0,shape=rc)
+      if rcpos > 0:
+        cwgpp = pm.Gamma('cwgp_pos',alpha=4.3,beta=5.3,shape=rcpos)
+      if rc > 0:
+        cwgp = pm.Normal('cwgp',mu=0.0,sigma=1.0,shape=rc)
       rc = 0
       rcpos = 0
       rvs = []
@@ -198,10 +206,13 @@ class GPMCMC(_surrogate):
         else:
           rvs.append(cwgp[rc])
           rc += 1
-      yin = yc.conmc(self.y[:,0],rvs)
+      yin = yc.conmc(ysort,rvs)
+      yder = yc.dermc(ysort,rvs)
 
-      # GP and likelihood
-      y_ = pm.Normal('yobs',mu=yin,sigma=1.0,observed=np.zeros(self.nsamp)) 
+      # Standard Gaussian potential with gradient penalty
+      y = pm.Potential('ypot',\
+            -0.5*self.nsamp*pt.log(2*np.pi)-0.5*pt.sum(pt.power(yin-ycdf,2))\
+            +pt.sum(pt.log(yder)))
 
       # Fit and process results depending on method
       if method == 'map':

@@ -215,6 +215,8 @@ class affine:
     return self.b*np.power(y,0)
   def conmc(self,y,rvs):
     return rvs[0] + rvs[1]*y
+  def dermc(self,y,rvs):
+    return rvs[1]*pt.power(y,0)
 class meanstd(affine):
   def __init__(self,y):
     mean = np.mean(y)
@@ -223,6 +225,8 @@ class meanstd(affine):
     self.b = 1/std
   def conmc(self,y,rvs):
     return self.con(y)
+  def dermc(self,y,rvs):
+    return self.b*pt.power(y,0)
 class maxmin(affine):
   def __init__(self,x,centred=False,safety=0.0):
     xmin = np.min(x)*(1-safety)
@@ -237,6 +241,8 @@ class maxmin(affine):
       self.b = 1/xminus
   def conmc(self,y,rvs):
     return self.con(y)
+  def dermc(self,y,rvs):
+    return self.b*pt.power(y,0)
 class uniform(affine):
   def __init__(self,dist):
     self.con = partial(std_uniform,dist=dist)
@@ -247,6 +253,8 @@ class uniform(affine):
     self.b = 1/span
   def conmc(self,y,rvs):
     return self.con(y)
+  def dermc(self,y,rvs):
+    return self.b*pt.power(y,0)
 class arcsinh:
   def __init__(self,a,b,c,d):
     self.a = a
@@ -266,6 +274,8 @@ class arcsinh:
     return self.b/np.sqrt(np.power(self.d,2)+np.power(y-self.c,2))
   def conmc(self,y,rvs):
     return rvs[0] + rvs[1]*pt.arcsinh((y-rvs[2])/rvs[3])
+  def dermc(self,y,rvs):
+    return rvs[1]/pt.sqrt(pt.power(rvs[3],2)+pt.power(y-rvs[2],2))
 # Box cox with lambad defined such that prior peak at 0 gives (almost) identity transform
 class boxcox:
   def __init__(self,lamb):
@@ -283,11 +293,14 @@ class boxcox:
   def conmc(self,y,rvs):
     lambp = rvs[0] + 1
     return (pt.sgn(y)*pt.power(pt.abs(y),lambp)-1)/lambp
+  def dermc(self,y,rvs):
+    return pt.power(pt.abs(y),rvs[0])
 # Box cox as above but auto fitted with scikit-learn
 class boxcoxf:
   def __init__(self,y):
     pt = PowerTransformer(method='box-cox',standardize=False)
     pt.fit(y.reshape(-1,1))
+    self.lamb = pt.lambdas_[0]
   def con(self,y):
     lambp = self.lamb + 1
     return (np.sign(y)*np.power(np.abs(y),lambp)-1)/lambp
@@ -300,6 +313,8 @@ class boxcoxf:
   def conmc(self,y,rvs):
     lambp = self.lamb + 1
     return (pt.sgn(y)*pt.power(pt.abs(y),lambp)-1)/lambp
+  def dermc(self,y,rvs):
+    return pt.power(pt.abs(y),self.lamb)
 class sinharcsinh:
   def __init__(self,a,b):
     self.a = a
@@ -315,6 +330,8 @@ class sinharcsinh:
     return self.b*np.cosh(self.b*np.arcsinh(y)-self.a)/np.sqrt(1+np.power(y,2))
   def conmc(self,y,rvs):
     return pt.sinh(rvs[1]*pt.arcsinh(y)-rvs[0])
+  def dermc(self,y,rvs):
+    return rvs[1]*pt.cosh(rvs[1]*pt.arcsinh(y)-rvs[0])/pt.sqrt(1+pt.power(y,2))
 class sal:
   def __init__(self,a,b,c,d):
     self.a = a
@@ -334,6 +351,8 @@ class sal:
     return self.b*self.d*np.cosh(self.d*np.arcsinh(y)-self.c)/np.sqrt(1+np.power(y,2))
   def conmc(self,y,rvs):
     return rvs[0] + rvs[1]*pt.sinh(rvs[3]*pt.arcsinh(y)-rvs[2])
+  def dermc(self,y,rvs):
+    return rvs[1]*rvs[3]*pt.cosh(rvs[3]*pt.arcsinh(y)-rvs[2])/pt.sqrt(1+pt.power(y,2))
 
 # Input warping with kumaraswamy distribution
 class kumaraswamy:
@@ -353,6 +372,8 @@ class kumaraswamy:
     return self.a*self.b*np.power(x,self.a-1)*np.power(1-np.power(x,self.a),self.b-1)
   def conmc(self,x,rvs):
     return 1 - pt.power(1-pt.power(x,rvs[0]),rvs[1])
+  def dermc(self,x,rvs):
+    return rvs[0]*rvs[1]*pt.power(x,rvs[0]-1)*pt.power(1-pt.power(x,rvs[0]),rvs[1]-1)
 
 # Composite warping class
 class wgp:
@@ -445,13 +466,23 @@ class wgp:
     x = copy.deepcopy(y)
     for i in self.warpings:
       res *= i.der(x)
-      x[:,0] = i.con(x[:,0])
+      x = i.con(x)
     return res
 
   def conmc(self,y,rvs):
-    res = y
+    res = copy.deepcopy(y)
     rc = 0
     for i,j in enumerate(self.warpings):
       res = j.conmc(res,rvs[rc:self.pid[i]])
+      rc += (self.pid[i]-rc)
+    return res
+
+  def dermc(self,y,rvs):
+    res = pt.ones_like(y)
+    x = copy.deepcopy(y)
+    rc = 0
+    for i,j in enumerate(self.warpings):
+      res *= j.dermc(x,rvs[rc:self.pid[i]])
+      x = j.conmc(x,rvs[rc:self.pid[i]])
       rc += (self.pid[i]-rc)
     return res
