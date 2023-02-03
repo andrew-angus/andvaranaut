@@ -407,6 +407,84 @@ class GPMCMC(_surrogate):
 
     return xopt,yopt
 
+  # Fit GP with inverse optimisation
+  def inverse_opt(self,yobs,\
+      method='mcmc_mean',return_data=False,iwgp=False,**kwargs):
+    self.m, self.gp, self.hypers, data = self.__inverse(yobs,method,\
+        iwgp,**kwargs)
+    if return_data:
+      return data
+
+  # More flexible private fit method which can use unconverted or train-test datasets
+  def __inverse(self,yobs,method,iwgp,**kwargs):
+    
+    # PyMC context manager
+    m = pm.Model()
+    with m:
+      # Priors on GP hyperparameters
+      if self.noise:
+        gvar = pm.HalfNormal('gv',sigma=0.4)
+      else:
+        gvar = 1e-8
+      kls = pm.Gamma('l',alpha=2.15,beta=6.91,shape=3)
+      kvar = pm.Gamma('kv',alpha=4.3,beta=5.3)
+
+      # Add y observations to existing dataset
+      obs = len(yobs)
+      yobc = self.yconrevs[0].con(yobs)
+      yin = np.vstack([self.yc,yobc]).flatten()
+
+      # Add observations and distributions
+      xprior1 = pm.Uniform('x0',lower=0.4e6,upper=1.2e6)
+      xprior2 = pm.Uniform('x1',lower=1.5,upper=3.5)
+      xprior3 = pm.Uniform('x2',lower=1.5,upper=3.5)
+      priors = [xprior1,xprior2,xprior3]
+      xin = pt.zeros((self.nsamp+obs,self.nx))
+      xin = pt.set_subtensor(xin[:self.nsamp],self.xc)
+      for i in range(self.nx):
+        if isinstance(self.xconrevs[i],wgp):
+          xin = pt.set_subtensor(xin[self.nsamp:,i],\
+              self.xconrevs[i].con(priors[i]))
+        else:
+          xin = pt.set_subtensor(xin[self.nsamp:,i],\
+              self.xconrevs[i].con(priors[i],np.empty(0)))
+
+      # Setup kernel
+      if self.kernel == 'RBF':
+        kern = kvar*pm.gp.cov.ExpQuad(self.nx,ls=kls)
+      elif self.kernel == 'Matern52':
+        kern = kvar*pm.gp.cov.Matern52(self.nx,ls=kls)
+      elif self.kernel == 'Matern32':
+        kern = kvar*pm.gp.cov.Matern32(self.nx,ls=kls)
+      elif self.kernel == 'Exponential':
+        kern = kvar*pm.gp.cov.Exponential(self.nx,ls=kls)
+
+      # GP and likelihood
+      gp = pm.gp.Marginal(cov_func=kern)
+      y_ = gp.marginal_likelihood("y", X=xin, y=yin, noise=gvar)
+
+      # Fit and process results depending on method
+      if method == 'map':
+        data = pm.find_MAP(**kwargs)
+        mp = copy.deepcopy(data)
+      else:
+        data = pm.sample(**kwargs)
+        if method == 'mcmc_mean':
+          mp = self.mean_extract(data)
+        elif method == 'mcmc_map':
+          mp = self.map_extract(data)
+        else:
+          raise Exception('method must be one of map, mcmc_map, or mcmc_mean')
+
+      mp['x'] = np.array([mp['x0'],mp['x1'],mp['x2']])
+      self.xopt = mp['x']
+
+      # Input warping update
+      if iwgp:
+        self.iwgp_set(mp['iwgp'])
+
+    return m, gp, mp, data
+
   """
   # Assess GP performance with several test plots and RMSE calcs
   def test_plots(self,restarts=10,revert=True,yplots=True,xplots=True,opt=True):
