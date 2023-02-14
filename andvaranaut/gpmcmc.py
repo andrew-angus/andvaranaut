@@ -436,7 +436,7 @@ class GPMCMC(_surrogate):
       yobc = self.yconrevs[0].con(yobs)
       yin = np.vstack([self.yc,yobc]).flatten()
 
-      # Add observations and distributions
+      # Convert distributions from scipy to pymc
       priors = []
       for i,j in enumerate(self.priors):
         if isinstance(j.dist,uniform_gen):
@@ -459,15 +459,12 @@ class GPMCMC(_surrogate):
           else:
             prior = pm.Normal(f'x{i}',mu=j.kwds['loc'],\
                 sigma=j.kwds['scale'])
+        else:
+          raise Exception('Prior distribution conversion from scipy to pymc not implemented')
         priors.append(prior)
 
-      #xprior1 = pm.Uniform('x0',lower=0.4e6,upper=1.2e6)
-      #xprior2 = pm.Uniform('x1',lower=1.5,upper=3.5)
-      #xprior3 = pm.Uniform('x2',lower=1.5,upper=3.5)
-      #priors = [xprior1,xprior2,xprior3]
-      xin = pt.zeros((self.nsamp+obs,self.nx))
-
       # Input warping
+      xin = pt.zeros((self.nsamp+obs,self.nx))
       if iwgp:
         rc = 0
         for i in range(self.nx):
