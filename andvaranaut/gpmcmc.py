@@ -17,6 +17,7 @@ import pymc as pm
 import arviz as az
 import pytensor.tensor as pt
 from scipy.optimize import Bounds
+from scipy.stats._continuous_distns import *
 
 # Inherit from surrogate class and add GP specific methods
 class GPMCMC(_surrogate):
@@ -166,7 +167,7 @@ class GPMCMC(_surrogate):
     return mp
 
   # Use modified Gaussian likelihood to fit cwgp parameters
-  def y_warp(self,method='mcmc_map',return_data=True,**kwargs):
+  def y_warp(self,method='mcmc_map',**kwargs):
 
     # Precalcs
     stdnorm = st.norm()
@@ -418,6 +419,7 @@ class GPMCMC(_surrogate):
   # More flexible private fit method which can use unconverted or train-test datasets
   def __inverse(self,yobs,method,iwgp,**kwargs):
     
+    from andvaranaut.transform import kumaraswamy
     # PyMC context manager
     m = pm.Model()
     with m:
@@ -435,19 +437,71 @@ class GPMCMC(_surrogate):
       yin = np.vstack([self.yc,yobc]).flatten()
 
       # Add observations and distributions
-      xprior1 = pm.Uniform('x0',lower=0.4e6,upper=1.2e6)
-      xprior2 = pm.Uniform('x1',lower=1.5,upper=3.5)
-      xprior3 = pm.Uniform('x2',lower=1.5,upper=3.5)
-      priors = [xprior1,xprior2,xprior3]
+      priors = []
+      for i,j in enumerate(self.priors):
+        if isinstance(j.dist,uniform_gen):
+          if len(j.args) >= 2:
+            prior = pm.Uniform(f'x{i}',lower=j.args[0],\
+                upper=j.args[0]+j.args[1])
+          elif len(j.args) == 1:
+            prior = pm.Uniform(f'x{i}',lower=j.args[0],\
+                upper=j.args[0]+j.kwds['scale'])
+          else:
+            prior = pm.Uniform(f'x{i}',lower=j.kwds['loc'],\
+                upper=j.kwds['loc']+j.kwds['scale'])
+        elif isinstance(j.dist,norm_gen):
+          if len(j.args) >= 2:
+            prior = pm.Normal(f'x{i}',mu=j.args[0],\
+                sigma=j.args[1])
+          elif len(j.args) == 1:
+            prior = pm.Normal(f'x{i}',mu=j.args[0],\
+                sigma=j.kwds['scale'])
+          else:
+            prior = pm.Normal(f'x{i}',mu=j.kwds['loc'],\
+                sigma=j.kwds['scale'])
+        priors.append(prior)
+
+      #xprior1 = pm.Uniform('x0',lower=0.4e6,upper=1.2e6)
+      #xprior2 = pm.Uniform('x1',lower=1.5,upper=3.5)
+      #xprior3 = pm.Uniform('x2',lower=1.5,upper=3.5)
+      #priors = [xprior1,xprior2,xprior3]
       xin = pt.zeros((self.nsamp+obs,self.nx))
-      xin = pt.set_subtensor(xin[:self.nsamp],self.xc)
-      for i in range(self.nx):
-        if isinstance(self.xconrevs[i],wgp):
-          xin = pt.set_subtensor(xin[self.nsamp:,i],\
-              self.xconrevs[i].con(priors[i]))
-        else:
-          xin = pt.set_subtensor(xin[self.nsamp:,i],\
-              self.xconrevs[i].con(priors[i],np.empty(0)))
+
+      # Input warping
+      if iwgp:
+        rc = 0
+        for i in range(self.nx):
+          if isinstance(self.xconrevs[i],wgp):
+            rc += self.xconrevs[i].np
+        iwgp = pm.Gamma('iwgp',alpha=4.3,beta=5.3,shape=rc)
+        rc = 0
+        check = True
+        for i in range(self.nx):
+          if isinstance(self.xconrevs[i],wgp):
+            check = False
+            rvs = [iwgp[k] for k in range(rc,rc+self.xconrevs[i].np)]
+            xin = pt.set_subtensor(xin[:self.nsamp,i],\
+                self.xconrevs[i].conmc(self.x[:,i],rvs))
+            xin = pt.set_subtensor(xin[self.nsamp:,i],\
+                self.xconrevs[i].conmc(priors[i],rvs))
+            rc += self.xconrevs[i].np
+          else:
+            xin = pt.set_subtensor(xin[:self.nsamp,i],\
+                self.xconrevs[i].conmc(self.x[:,i],np.empty(0)))
+            xin = pt.set_subtensor(xin[self.nsamp:,i],\
+                self.xconrevs[i].conmc(priors[i],np.empty(0)))
+        if check:
+          raise Exception('Error: iwgp set to true but none of xconrevs are wgp classes')
+      else:
+        xin = pt.set_subtensor(xin[:self.nsamp],self.xc)
+        for i in range(self.nx):
+          if isinstance(self.xconrevs[i],wgp):
+            xin = pt.set_subtensor(xin[self.nsamp:,i],\
+                self.xconrevs[i].conmc(priors[i],\
+                pt.as_tensor_variable(self.xconrevs[i].params)))
+          else:
+            xin = pt.set_subtensor(xin[self.nsamp:,i],\
+                self.xconrevs[i].conmc(priors[i],np.empty(0)))
 
       # Setup kernel
       if self.kernel == 'RBF':

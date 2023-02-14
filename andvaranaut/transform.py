@@ -470,7 +470,7 @@ class wgp:
     return res
 
   def conmc(self,y,rvs):
-    res = copy.deepcopy(y)
+    res = y
     rc = 0
     for i,j in enumerate(self.warpings):
       res = j.conmc(res,rvs[rc:self.pid[i]])
@@ -479,10 +479,11 @@ class wgp:
 
   def dermc(self,y,rvs):
     res = pt.ones_like(y)
-    x = copy.deepcopy(y)
+    #x = copy.deepcopy(y)
+    #x = y
     rc = 0
     for i,j in enumerate(self.warpings):
-      res *= j.dermc(x,rvs[rc:self.pid[i]])
-      x = j.conmc(x,rvs[rc:self.pid[i]])
+      res *= j.dermc(y,rvs[rc:self.pid[i]])
+      y = j.conmc(y,rvs[rc:self.pid[i]])
       rc += (self.pid[i]-rc)
     return res
