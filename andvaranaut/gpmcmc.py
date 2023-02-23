@@ -17,7 +17,7 @@ import pymc as pm
 import arviz as az
 import pytensor.tensor as pt
 from scipy.optimize import Bounds
-from scipy.stats._continuous_distns import *
+from scipy.stats._continuous_distns import uniform_gen, norm_gen
 
 # Inherit from surrogate class and add GP specific methods
 class GPMCMC(_surrogate):
@@ -79,7 +79,7 @@ class GPMCMC(_surrogate):
         gvar = pm.HalfNormal('gv',sigma=0.4)
       else:
         gvar = 1e-8
-      kls = pm.Gamma('l',alpha=2.15,beta=6.91,shape=3)
+      kls = pm.Gamma('l',alpha=2.15,beta=6.91,shape=self.nx)
       kvar = pm.Gamma('kv',alpha=4.3,beta=5.3)
 
       # Input warping
@@ -428,7 +428,7 @@ class GPMCMC(_surrogate):
         gvar = pm.HalfNormal('gv',sigma=0.4)
       else:
         gvar = 1e-8
-      kls = pm.Gamma('l',alpha=2.15,beta=6.91,shape=3)
+      kls = pm.Gamma('l',alpha=2.15,beta=6.91,shape=self.nx)
       kvar = pm.Gamma('kv',alpha=4.3,beta=5.3)
 
       # Add y observations to existing dataset
