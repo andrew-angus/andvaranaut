@@ -12,6 +12,7 @@ from functools import partial
 from andvaranaut.core import _core
 import ray
 from matplotlib import ticker
+from netCDF4 import *
 
 # Latin hypercube sampler and propagator, inherits core
 class LHC(_core):
@@ -133,6 +134,35 @@ class LHC(_core):
     self.x = x
     self.y = y
     self.nsamp = len(x)
+
+  # Saves key data to netcdf file
+  def save_netcdf(self,fname):
+    
+    f = Dataset(fname,'w')
+
+    # Create dimensions
+    inps = f.createDimension('inputs',self.nx)
+    outs = f.createDimension('outputs',self.ny)
+    samps = f.createDimension('samples',self.x.shape[0])
+
+    # Create variables
+    xsamps = f.createVariable('input_samples','f8',('samples','inputs'))
+    ysamps = f.createVariable('output_samples','f8',('samples','outputs'))
+
+    # Write variables
+    xsamps[:,:] = self.x
+    ysamps[:,:] = self.y
+    f.close()
+
+  # Loads key data to netcdf file
+  def load_netcdf(self,fname):
+    
+    f = Dataset(fname,'r')
+
+    self.x = f.variables['input_samples'][:,:]
+    self.y = f.variables['output_samples'][:,:]
+
+    f.close()
 
 # Inherit from LHC class and add data conversion methods
 class _surrogate(LHC):
