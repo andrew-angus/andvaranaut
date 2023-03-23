@@ -1,7 +1,7 @@
 #!/bin/python3
 
 import warnings
-import pickle
+import cloudpickle as pickle
 import numpy as np
 from functools import partial
 import scipy.stats as st

@@ -32,5 +32,6 @@ setup(
     "ray",
     "scikit-learn",
     "seaborn",
+    "cloudpickle",
     ],
 )
