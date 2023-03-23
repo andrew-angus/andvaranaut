@@ -228,7 +228,7 @@ class meanstd(affine):
   def dermc(self,y,rvs):
     return self.b*pt.power(y,0)
 class maxmin(affine):
-  def __init__(self,x,centred=False,safety=0.0):
+  def __init__(self,x,centred=False,safety=1e-6):
     xmin = np.min(x)*(1-safety)
     xmax = np.max(x)*(1+safety)
     xminus = xmax-xmin
