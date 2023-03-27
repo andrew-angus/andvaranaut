@@ -76,11 +76,13 @@ class GPMCMC(_surrogate):
     with m:
       # Priors on GP hyperparameters
       if self.noise:
-        gvar = pm.HalfNormal('gv',sigma=0.4)
+        gvar = 1e-8 + pm.HalfNormal('gv',sigma=0.4)
       else:
         gvar = 1e-8
-      kls = pm.Gamma('l',alpha=2.15,beta=6.91,shape=self.nx)
-      kvar = pm.Gamma('kv',alpha=4.3,beta=5.3)
+      #kls = pm.Gamma('l',alpha=2.15,beta=6.91,shape=self.nx)
+      kls = 1e-3 + pm.LogNormal('l',mu=0.0,sigma=1.0,shape=self.nx)
+      #kvar = pm.Gamma('kv',alpha=4.3,beta=5.3)
+      kvar = 1e-3 + pm.LogNormal('kv',mu=1.0,sigma=1.0)
 
       # Input warping
       if iwgp:
@@ -88,7 +90,8 @@ class GPMCMC(_surrogate):
         for i in range(self.nx):
           if isinstance(self.xconrevs[i],wgp):
             rc += self.xconrevs[i].np
-        iwgp = pm.Gamma('iwgp',alpha=4.3,beta=5.3,shape=rc)
+        #iwgp = pm.Gamma('iwgp',alpha=4.3,beta=5.3,shape=rc)
+        iwgp = 1e-3 + pm.LogNormal('iwgp',mu=1.0,sigma=1.0,shape=rc)
         rc = 0
         x1 = []
         check = True
