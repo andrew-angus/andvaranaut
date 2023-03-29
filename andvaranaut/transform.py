@@ -231,6 +231,14 @@ class meanstd(affine):
       std = pt.std(y)
     self.a = -mean/std
     self.b = 1/std
+class stddev(affine):
+  def __init__(self,y,mode='numpy'):
+    if mode == 'numpy':
+      std = np.std(y)
+    else:
+      std = pt.std(y)
+    self.a = 0
+    self.b = 1/std
 class maxmin(affine):
   def __init__(self,x,centred=False,safety=1e-6,mode='numpy'):
     if mode == 'numpy':
@@ -447,6 +455,10 @@ class wgp:
         if y is None:
           raise Exception('Must supply y array to use meanstd')
         self.warpings.append(meanstd(yc,mode=mode))
+      elif i == 'stddev':
+        if y is None:
+          raise Exception('Must supply y array to use stddev')
+        self.warpings.append(stddev(yc,mode=mode))
       elif i == 'boxcoxf':
         if y is None:
           raise Exception('Must supply y array to use fitted box cox')
@@ -461,7 +473,7 @@ class wgp:
         self.warpings.append(maxmin(yc,mode=mode))
       elif i == 'pzero':
         if y is None:
-          raise Exception('Must supply y array to use maxmin')
+          raise Exception('Must supply y array to use pzero')
         self.warpings.append(preserve_zero(yc,yzero,mode=mode))
       self.pid[pidc] = pc
       pidc += 1
