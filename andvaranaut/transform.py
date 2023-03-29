@@ -9,6 +9,7 @@ import os
 import copy
 from sklearn.preprocessing import QuantileTransformer, RobustScaler, PowerTransformer
 import pytensor.tensor as pt
+from pytensor import shared as as_pt
 
 ## Conversion functions
 
@@ -204,33 +205,40 @@ class affine:
   def __init__(self,a,b):
     self.a = a
     self.b = b
-    if not self.b > 0.0:
-      raise Exception('Parameter b must be positive')
+    try:
+      if not self.b > 0.0:
+        raise Exception('Parameter b must be positive')
+    except:
+      pass
     self.default_priors = [st.norm(),st.norm()]
   def con(self,y):
     return self.a + self.b*y
   def rev(self,y):
     return (y-self.a)/self.b
   def der(self,y):
-    return self.b*np.power(y,0)
-  def conmc(self,y,rvs):
-    return rvs[0] + rvs[1]*y
-  def dermc(self,y,rvs):
-    return rvs[1]*pt.power(y,0)
+    return self.b*np.ones_like(y)
+  def conmc(self,y):
+    return self.con(y)
+  def dermc(self,y):
+    return self.b*pt.ones_like(y)
 class meanstd(affine):
-  def __init__(self,y):
-    mean = np.mean(y)
-    std = np.std(y)
+  def __init__(self,y,mode='numpy'):
+    if mode == 'numpy':
+      mean = np.mean(y)
+      std = np.std(y)
+    else:
+      mean = pt.mean(y)
+      std = pt.std(y)
     self.a = -mean/std
     self.b = 1/std
-  def conmc(self,y,rvs):
-    return self.con(y)
-  def dermc(self,y,rvs):
-    return self.b*pt.power(y,0)
 class maxmin(affine):
-  def __init__(self,x,centred=False,safety=1e-6):
-    xmin = np.min(x)*(1-safety)
-    xmax = np.max(x)*(1+safety)
+  def __init__(self,x,centred=False,safety=1e-6,mode='numpy'):
+    if mode == 'numpy':
+      xmin = np.min(x)*(1-safety)
+      xmax = np.max(x)*(1+safety)
+    else:
+      xmin = pt.min(x)*(1-safety)
+      xmax = pt.max(x)*(1+safety)
     xminus = xmax-xmin
     xplus = xmax+xmin
     if centred:
@@ -239,10 +247,6 @@ class maxmin(affine):
     else:
       self.a = -xmin/xminus
       self.b = 1/xminus
-  def conmc(self,y,rvs):
-    return self.con(y)
-  def dermc(self,y,rvs):
-    return self.b*pt.power(y,0)
 class uniform(affine):
   def __init__(self,dist):
     self.con = partial(std_uniform,dist=dist)
@@ -251,10 +255,6 @@ class uniform(affine):
     span = intv[1]-intv[0]
     self.a = -intv[0]/span
     self.b = 1/span
-  def conmc(self,y,rvs):
-    return self.con(y)
-  def dermc(self,y,rvs):
-    return self.b*pt.power(y,0)
 class arcsinh:
   def __init__(self,a,b,c,d):
     self.a = a
@@ -262,20 +262,23 @@ class arcsinh:
     self.c = c
     self.d = d
     self.default_priors = [st.norm(),st.norm(),st.norm(),st.norm()]
-    if not self.b > 0.0:
-      raise Exception('Parameter b must be positive')
-    if not self.d > 0.0:
-      raise Exception('Parameter d must be positive')
+    try:
+      if not self.b > 0.0:
+        raise Exception('Parameter b must be positive')
+      if not self.d > 0.0:
+        raise Exception('Parameter d must be positive')
+    except:
+      pass
   def con(self,y):
     return self.a + self.b*np.arcsinh((y-self.c)/self.d)
   def rev(self,y):
     return self.c + self.d*np.sinh((y-self.a)/self.b)
   def der(self,y):
     return self.b/np.sqrt(np.power(self.d,2)+np.power(y-self.c,2))
-  def conmc(self,y,rvs):
-    return rvs[0] + rvs[1]*pt.arcsinh((y-rvs[2])/rvs[3])
-  def dermc(self,y,rvs):
-    return rvs[1]/pt.sqrt(pt.power(rvs[3],2)+pt.power(y-rvs[2],2))
+  def conmc(self,y):
+    return self.a + self.b*pt.arcsinh((y-self.c)/self.d)
+  def dermc(self,y):
+    return self.b/pt.sqrt(pt.power(self.d,2)+pt.power(y-self.c,2))
 # Box cox with lambad defined such that prior peak at 0 gives (almost) identity transform
 class boxcox:
   def __init__(self,lamb):
@@ -290,37 +293,26 @@ class boxcox:
     return np.sign(term)*np.power(np.abs(term),1/lambp)
   def der(self,y):
     return np.power(np.abs(y),self.lamb)
-  def conmc(self,y,rvs):
-    lambp = rvs[0] + 1
+  def conmc(self,y):
+    lambp = self.lamb + 1
     return (pt.sgn(y)*pt.power(pt.abs(y),lambp)-1)/lambp
-  def dermc(self,y,rvs):
-    return pt.power(pt.abs(y),rvs[0])
+  def dermc(self,y):
+    return pt.power(pt.abs(y),self.lamb)
 # Box cox as above but auto fitted with scikit-learn
-class boxcoxf:
+class boxcoxf(boxcox):
   def __init__(self,y):
     pt = PowerTransformer(method='box-cox',standardize=False)
     pt.fit(y.reshape(-1,1))
     self.lamb = pt.lambdas_[0]
-  def con(self,y):
-    lambp = self.lamb + 1
-    return (np.sign(y)*np.power(np.abs(y),lambp)-1)/lambp
-  def rev(self,y):
-    lambp = self.lamb + 1
-    term = y*lambp+1
-    return np.sign(term)*np.power(np.abs(term),1/lambp)
-  def der(self,y):
-    return np.power(np.abs(y),self.lamb)
-  def conmc(self,y,rvs):
-    lambp = self.lamb + 1
-    return (pt.sgn(y)*pt.power(pt.abs(y),lambp)-1)/lambp
-  def dermc(self,y,rvs):
-    return pt.power(pt.abs(y),self.lamb)
 class sinharcsinh:
   def __init__(self,a,b):
     self.a = a
     self.b = b
-    if not self.b > 0.0:
-      raise Exception('Parameter b must be positive')
+    try:
+      if not self.b > 0.0:
+        raise Exception('Parameter b must be positive')
+    except:
+      pass
     self.default_priors = [st.norm(),st.norm()]
   def con(self,y):
     return np.sinh(self.b*np.arcsinh(y)-self.a)
@@ -328,20 +320,23 @@ class sinharcsinh:
     return np.sinh((np.arcsinh(y)+self.a)/self.b)
   def der(self,y):
     return self.b*np.cosh(self.b*np.arcsinh(y)-self.a)/np.sqrt(1+np.power(y,2))
-  def conmc(self,y,rvs):
-    return pt.sinh(rvs[1]*pt.arcsinh(y)-rvs[0])
-  def dermc(self,y,rvs):
-    return rvs[1]*pt.cosh(rvs[1]*pt.arcsinh(y)-rvs[0])/pt.sqrt(1+pt.power(y,2))
+  def conmc(self,y):
+    return pt.sinh(self.b*pt.arcsinh(y)-self.a)
+  def dermc(self,y):
+    return self.b*pt.cosh(self.b*pt.arcsinh(y)-self.a)/pt.sqrt(1+pt.power(y,2))
 class sal:
   def __init__(self,a,b,c,d):
     self.a = a
     self.b = b
     self.c = c
     self.d = d
-    if not self.b > 0.0:
-      raise Exception('Parameter b must be positive')
-    if not self.d > 0.0:
-      raise Exception('Parameter d must be positive')
+    try:
+      if not self.b > 0.0:
+        raise Exception('Parameter b must be positive')
+      if not self.d > 0.0:
+        raise Exception('Parameter d must be positive')
+    except:
+      pass
     self.default_priors = [st.norm(),st.norm(),st.norm(),st.norm()]
   def con(self,y):
     return self.a + self.b*np.sinh(self.d*np.arcsinh(y)-self.c)
@@ -349,20 +344,23 @@ class sal:
     return np.sinh((np.arcsinh((y-self.a)/self.b)+self.c)/self.d)
   def der(self,y):
     return self.b*self.d*np.cosh(self.d*np.arcsinh(y)-self.c)/np.sqrt(1+np.power(y,2))
-  def conmc(self,y,rvs):
-    return rvs[0] + rvs[1]*pt.sinh(rvs[3]*pt.arcsinh(y)-rvs[2])
-  def dermc(self,y,rvs):
-    return rvs[1]*rvs[3]*pt.cosh(rvs[3]*pt.arcsinh(y)-rvs[2])/pt.sqrt(1+pt.power(y,2))
+  def conmc(self,y):
+    return self.a + self.b*pt.sinh(self.d*pt.arcsinh(y)-self.c)
+  def dermc(self,y):
+    return self.b*self.d*pt.cosh(self.d*pt.arcsinh(y)-self.c)/pt.sqrt(1+pt.power(y,2))
 
 # Input warping with kumaraswamy distribution
 class kumaraswamy:
   def __init__(self,a,b):
     self.a = a
     self.b = b
-    if not self.a > 0.0:
-      raise Exception('Parameter a must be positive')
-    if not self.b > 0.0:
-      raise Exception('Parameter b must be positive')
+    try:
+      if not self.a > 0.0:
+        raise Exception('Parameter a must be positive')
+      if not self.b > 0.0:
+        raise Exception('Parameter b must be positive')
+    except:
+      pass
     self.default_priors = [st.norm(),st.norm()]
   def con(self,x):
     return 1 - np.power(1-np.power(x,self.a),self.b)
@@ -370,26 +368,44 @@ class kumaraswamy:
     return np.power(1-np.power(1-x,1/self.b),1/self.a)
   def der(self,x):
     return self.a*self.b*np.power(x,self.a-1)*np.power(1-np.power(x,self.a),self.b-1)
-  def conmc(self,x,rvs):
-    return 1 - pt.power(1-pt.power(x,rvs[0]),rvs[1])
-  def dermc(self,x,rvs):
-    return rvs[0]*rvs[1]*pt.power(x,rvs[0]-1)*pt.power(1-pt.power(x,rvs[0]),rvs[1]-1)
+  def conmc(self,x):
+    return 1 - pt.power(1-pt.power(x,self.a),self.b)
+  def dermc(self,x):
+    return self.a*self.b*pt.power(x,self.a-1)*pt.power(1-pt.power(x,self.a),self.b-1)
+
+# Transform that preserves a mapping of zero to zero
+# Important with delta learning
+class preserve_zero(affine):
+  def __init__(self,y,yzero,mode='numpy'):
+    if mode == 'numpy':
+      ystd = np.std(y)
+    else:
+      ystd = pt.std(y)
+    self.a = -yzero/ystd
+    self.b = 1/ystd
 
 # Composite warping class
 class wgp:
-  def __init__(self,warpings,params,y=None,xdist=None):
+  def __init__(self,warpings,params,y=None,xdist=None,mode='numpy'):
     allowed = ['affine','logarithm','arcsinh','boxcox','sinharcsinh','sal', \
-               'meanstd','boxcoxf','uniform','maxmin','kumaraswamy']
+               'meanstd','boxcoxf','uniform','maxmin','kumaraswamy','pzero']
     self.warping_names = warpings
     self.warpings = []
     self.params = params
     self.pid = np.zeros(len(warpings),dtype=np.int32)
-    self.pos = np.zeros(len(params),dtype=np.bool_)
+    try:
+      self.pos = np.zeros(len(params),dtype=np.bool_)
+    except:
+      self.pos = np.zeros(len(params.eval()),dtype=np.bool_)
     self.default_priors = []
     pc = 0
     pidc = 0
+    yzero = 0.0
     if y is not None:
-      yc = copy.deepcopy(y)
+      if mode == 'numpy':
+        yc = copy.deepcopy(y)
+      else:
+        yc = as_pt(y)
     # Fill self.warpings with conrev classes and \
     # self.pid with the starting index in params for each class
     for i in warpings:
@@ -430,7 +446,7 @@ class wgp:
       elif i == 'meanstd':
         if y is None:
           raise Exception('Must supply y array to use meanstd')
-        self.warpings.append(meanstd(yc))
+        self.warpings.append(meanstd(yc,mode=mode))
       elif i == 'boxcoxf':
         if y is None:
           raise Exception('Must supply y array to use fitted box cox')
@@ -442,11 +458,20 @@ class wgp:
       elif i == 'maxmin':
         if y is None:
           raise Exception('Must supply y array to use maxmin')
-        self.warpings.append(maxmin(yc))
+        self.warpings.append(maxmin(yc,mode=mode))
+      elif i == 'pzero':
+        if y is None:
+          raise Exception('Must supply y array to use maxmin')
+        self.warpings.append(preserve_zero(yc,yzero,mode=mode))
       self.pid[pidc] = pc
       pidc += 1
       if y is not None:
-        yc = self.warpings[-1].con(yc)
+        if mode == 'numpy':
+          yc = self.warpings[-1].con(yc)
+          yzero = self.warpings[-1].con(yzero)
+        else:
+          yc = self.warpings[-1].conmc(yc)
+          yzero = self.warpings[-1].conmc(yzero)
     self.np = pc
      
   def con(self,y):
@@ -469,6 +494,21 @@ class wgp:
       x = i.con(x)
     return res
 
+  def conmc(self,y):
+    res = as_pt(y)
+    for i in self.warpings:
+      res = i.conmc(res)
+    return res
+
+  def dermc(self,y):
+    res = pt.ones_like(y)
+    x = as_pt(y)
+    for i in self.warpings:
+      res *= i.dermc(x)
+      x = i.conmc(x)
+    return res
+
+  """
   def conmc(self,y,rvs):
     res = y
     rc = 0
@@ -487,3 +527,5 @@ class wgp:
       y = j.conmc(y,rvs[rc:self.pid[i]])
       rc += (self.pid[i]-rc)
     return res
+  """
+

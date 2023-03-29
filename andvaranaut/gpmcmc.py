@@ -62,27 +62,27 @@ class GPMCMC(_surrogate):
     self.__scrub_train_test()
 
   # Fit GP standard method
-  def fit(self,method='mcmc_mean',return_data=False,iwgp=False,**kwargs):
+  def fit(self,method='mcmc_mean',return_data=False,\
+      iwgp=False,cwgp=False,**kwargs):
     self.m, self.gp, self.hypers, data = self.__fit(self.xc,self.yc,method,\
-        iwgp,**kwargs)
+        iwgp,cwgp,**kwargs)
     if return_data:
       return data
 
   # More flexible private fit method which can use unconverted or train-test datasets
-  def __fit(self,x,y,method,iwgp,**kwargs):
+  def __fit(self,x,y,method,iwgp,cwgp,**kwargs):
     
     # PyMC context manager
     m = pm.Model()
+    self.nsamp = len(self.y)
     with m:
       # Priors on GP hyperparameters
       if self.noise:
-        gvar = 1e-8 + pm.HalfNormal('gv',sigma=0.4)
+        gvar = pm.HalfNormal('gv',sigma=0.4)
       else:
-        gvar = 1e-8
-      #kls = pm.Gamma('l',alpha=2.15,beta=6.91,shape=self.nx)
-      kls = 1e-3 + pm.LogNormal('l',mu=0.0,sigma=1.0,shape=self.nx)
-      #kvar = pm.Gamma('kv',alpha=4.3,beta=5.3)
-      kvar = 1e-3 + pm.LogNormal('kv',mu=1.0,sigma=1.0)
+        gvar = 0.0
+      kls = pm.LogNormal('l',mu=0.0,sigma=1.0,shape=self.nx)
+      kvar = pm.LogNormal('kv',mu=0.56,sigma=0.75)
 
       # Input warping
       if iwgp:
@@ -90,17 +90,15 @@ class GPMCMC(_surrogate):
         for i in range(self.nx):
           if isinstance(self.xconrevs[i],wgp):
             rc += self.xconrevs[i].np
-        #iwgp = pm.Gamma('iwgp',alpha=4.3,beta=5.3,shape=rc)
-        iwgp = 1e-3 + pm.LogNormal('iwgp',mu=1.0,sigma=1.0,shape=rc)
+        iwgp = pm.LogNormal('iwgp',mu=0.0,sigma=0.25,shape=rc)
         rc = 0
         x1 = []
         check = True
+        self.iwgp_set(iwgp,mode='pytensor')
         for i in range(self.nx):
           if isinstance(self.xconrevs[i],wgp):
             check = False
-            rvs = [iwgp[k] for k in range(rc,rc+self.xconrevs[i].np)]
-            x1.append(self.xconrevs[i].conmc(self.x[:,i],rvs))
-            rc += self.xconrevs[i].np
+            x1.append(self.xconrevs[i].conmc(self.x[:,i]))
           else:
             x1.append(self.xc[:,i])
           xin = pt.stack(x1,axis=1)
@@ -108,6 +106,43 @@ class GPMCMC(_surrogate):
           raise Exception('Error: iwgp set to true but none of xconrevs are wgp classes')
       else:
         xin = self.xc
+
+      # Output warping
+      if cwgp:
+        yc = self.yconrevs[0]
+        if not isinstance(yc,wgp):
+          raise Exception('Error: cwgp set to true but yconrevs class is not wgp')
+        npar = yc.np
+        if npar == 0:
+          raise Exception('Error: cwgp set to true but wgp class has no tuneable parameters')
+        rc = 0
+        rcpos = 0
+        for i in range(npar):
+          if yc.pos[i]:
+            rcpos += 1
+          else:
+            rc += 1
+        if rcpos > 0:
+          cwgpp = pm.TruncatedNormal('cwgp_pos',mu=1.0,sigma=1.0,\
+              lower=1e-3,upper=10.0,shape=rcpos)
+        if rc > 0:
+          cwgp = pm.Normal('cwgp',mu=0.0,sigma=1.0,shape=rc)
+        rc = 0
+        rcpos = 0
+        rvs = []
+        for i in range(npar):
+          if yc.pos[i]:
+            rvs.append(cwgpp[rcpos])
+            rcpos += 1
+          else:
+            rvs.append(cwgp[rc])
+            rc += 1
+        self.cwgp_set(rvs,mode='pytensor')
+        yc = self.yconrevs[0]
+        yin = yc.conmc(self.y[:,0])
+        yder = yc.dermc(self.y[:,0])
+      else:
+        yin = self.yc[:,0]
 
       # Setup kernel
       if self.kernel == 'RBF':
@@ -120,8 +155,20 @@ class GPMCMC(_surrogate):
         kern = kvar*pm.gp.cov.Exponential(self.nx,ls=kls)
 
       # GP and likelihood
-      gp = pm.gp.Marginal(cov_func=kern)
-      y_ = gp.marginal_likelihood("y", X=xin, y=self.yc[:,0], noise=gvar)
+      if cwgp:
+        kernplus = kern + pm.gp.cov.WhiteNoise(pt.sqrt(gvar))
+        K = kernplus(xin)
+        K += pt.identity_like(K)*1e-6
+        L = pt.slinalg.cholesky(K)
+        beta = pt.slinalg.solve_triangular(L,yin,lower=True)
+        alpha = pt.slinalg.solve_triangular(L.T,beta)
+        y = pm.Potential('ypot',-0.5*pt.dot(yin.T,alpha)\
+            -pt.sum(pt.log(pt.diag(L)))\
+            -0.5*self.nsamp*pt.log(2*np.pi)\
+            +pt.sum(pt.log(yder)))
+      else:
+        gp = pm.gp.Marginal(cov_func=kern)
+        y_ = gp.marginal_likelihood("y", X=xin, y=yin, noise=pt.sqrt(gvar))
 
       # Fit and process results depending on method
       if method == 'map':
@@ -133,12 +180,29 @@ class GPMCMC(_surrogate):
           mp = self.mean_extract(data)
         elif method == 'mcmc_map':
           mp = self.map_extract(data)
+          mp = pm.find_MAP(start=mp)
         else:
           raise Exception('method must be one of map, mcmc_map, or mcmc_mean')
 
-      # Input warping update
-      if iwgp:
-        self.iwgp_set(mp['iwgp'])
+    # Input warping update
+    if iwgp:
+      self.iwgp_set(mp['iwgp'])
+
+    if cwgp:
+      rc = 0
+      rcpos = 0
+      params = []
+      for i in range(npar):
+        if yc.pos[i]:
+          params.append(mp['cwgp_pos'][rcpos])
+          rcpos += 1
+        else:
+          params.append(mp['cwgp'][rc])
+          rc += 1
+      self.cwgp_set(np.array(params))
+      with m:
+        gp = pm.gp.Marginal(cov_func=kern)
+        y_ = gp.marginal_likelihood("y", X=xin, y=self.yc[:,0], sigma=pt.sqrt(gvar))
 
     return m, gp, mp, data
 
@@ -167,103 +231,39 @@ class GPMCMC(_surrogate):
         mp[key] = pos[key].values[:,lpamax]
       else:
         mp[key] = np.array(pos[key].values[lpamax])
+    if self.verbose:
+      print(f'Max log posterior sample: {mp}')
     return mp
 
-  # Use modified Gaussian likelihood to fit cwgp parameters
-  def y_warp(self,method='mcmc_map',**kwargs):
-
-    # Precalcs
-    stdnorm = st.norm()
-    ccdf = np.linspace(0,1,self.nsamp+2)[1:-1]
-    ycdf = stdnorm.ppf(ccdf)
-    ysort = np.sort(self.y[:,0])
-
-    # PyMC context manager
-    m = pm.Model()
-    with m:
-
-      # Output warping
-      yc = self.yconrevs[0]
-      if not isinstance(yc,wgp):
-        raise Exception('Error: cwgp set to true but yconrevs class is not wgp')
-      npar = yc.np
-      if npar == 0:
-        raise Exception('Error: cwgp set to true but wgp class has no tuneable parameters')
-      rc = 0
-      rcpos = 0
-      for i in range(npar):
-        if yc.pos[i]:
-          rcpos += 1
-        else:
-          rc += 1
-      if rcpos > 0:
-        cwgpp = pm.Gamma('cwgp_pos',alpha=4.3,beta=5.3,shape=rcpos)
-      if rc > 0:
-        cwgp = pm.Normal('cwgp',mu=0.0,sigma=1.0,shape=rc)
-      rc = 0
-      rcpos = 0
-      rvs = []
-      for i in range(npar):
-        if yc.pos[i]:
-          rvs.append(cwgpp[rcpos])
-          rcpos += 1
-        else:
-          rvs.append(cwgp[rc])
-          rc += 1
-      yin = yc.conmc(ysort,rvs)
-      yder = yc.dermc(ysort,rvs)
-
-      # Standard Gaussian potential with gradient penalty
-      y = pm.Potential('ypot',\
-            -0.5*self.nsamp*pt.log(2*np.pi)-0.5*pt.sum(pt.power(yin-ycdf,2))\
-            +pt.sum(pt.log(yder)))
-
-      # Fit and process results depending on method
-      if method == 'map':
-        data = pm.find_MAP(**kwargs)
-        mp = copy.deepcopy(data)
-      else:
-        data = pm.sample(**kwargs)
-        if method == 'mcmc_mean':
-          mp = self.mean_extract(data)
-        elif method == 'mcmc_map':
-          mp = self.map_extract(data)
-        else:
-          raise Exception('method must be one of map, mcmc_map, or mcmc_mean')
-
-      # Output warping update
-      rc = 0
-      rcpos = 0
-      params = []
-      for i in range(npar):
-        if yc.pos[i]:
-          params.append(mp['cwgp_pos'][rcpos])
-          rcpos += 1
-        else:
-          params.append(mp['cwgp'][rc])
-          rc += 1
-      self.cwgp_set(np.array(params))
-
-    return mp, data
-
-
   # Set output warping parameters
-  def cwgp_set(self,x):
-    self.change_yconrevs([wgp(self.yconrevs[0].warping_names,x,self.y)])
+  def cwgp_set(self,x,mode='numpy'):
+    if mode == 'numpy':
+      update = True
+    else:
+      update = False
+    self.change_yconrevs([wgp(self.yconrevs[0].warping_names,x,self.y[:,0],mode=mode)]\
+        ,update=update)
 
   # Set input warping parameters
-  def iwgp_set(self,x):
+  def iwgp_set(self,x,mode='numpy'):
+    if mode == 'numpy':
+      update = True
+    else:
+      update = False
     xconrevs = []
     rc = 0
     for i in range(self.nx):
       if isinstance(self.xconrevs[i],wgp):
-        ran = len(self.xconrevs[i].params)
+        try:
+          ran = len(self.xconrevs[i].params)
+        except:
+          ran = len(self.xconrevs[i].params.eval())
         xconrevs.append(wgp(self.xconrevs[i].warping_names,x[rc:rc+ran]\
-            ,y=self.x[:,i],xdist=self.priors[i]))
+            ,y=self.x[:,i],xdist=self.priors[i],mode=mode))
         rc += ran
       else:
         xconrevs.append(self.xconrevs[i])
-    self.change_xconrevs(xconrevs=xconrevs)
+    self.change_xconrevs(xconrevs=xconrevs,update=update)
 
   # Make train-test split and populate attributes
   def train_test(self,training_frac=0.9):
@@ -304,11 +304,12 @@ class GPMCMC(_surrogate):
     
     y = self.__predict(self.gp,self.hypers,xarg,return_var)
 
-    if revert and not return_var:
+    if revert:
       for i in range(self.ny):
-        y[:,i] = self.yconrevs[i].rev(y[:,i])
-    elif revert:
-      raise Exception("Reversion of variance not implemented, set return_var = False")
+        y[0][:,i] = self.yconrevs[i].rev(y[0][:,i])
+
+    if self.verbose:
+      print("warning: reversion of variance not implemented")
 
     return y
 
