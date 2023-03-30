@@ -396,7 +396,8 @@ class preserve_zero(affine):
 class wgp:
   def __init__(self,warpings,params,y=None,xdist=None,mode='numpy'):
     allowed = ['affine','logarithm','arcsinh','boxcox','sinharcsinh','sal', \
-               'meanstd','boxcoxf','uniform','maxmin','kumaraswamy','pzero']
+               'meanstd','boxcoxf','uniform','maxmin','kumaraswamy','pzero',\
+               'stddev']
     self.warping_names = warpings
     self.warpings = []
     self.params = params
