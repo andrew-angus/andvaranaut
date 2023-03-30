@@ -62,10 +62,11 @@ class GPMCMC(_surrogate):
     self.__scrub_train_test()
 
   # Fit GP standard method
-  def fit(self,method='mcmc_mean',return_data=False,\
+  def fit(self,method='map',return_data=False,\
       iwgp=False,cwgp=False,**kwargs):
-    self.m, self.gp, self.hypers, data = self.__fit(self.xc,self.yc,method,\
-        iwgp,cwgp,**kwargs)
+    self.m, self.gp, self.hypers, data = self.__fit(self.x,self.y,\
+        method,iwgp,cwgp,**kwargs)
+
     if return_data:
       return data
 
@@ -74,7 +75,7 @@ class GPMCMC(_surrogate):
     
     # PyMC context manager
     m = pm.Model()
-    self.nsamp = len(self.y)
+    nsamp = len(y)
     with m:
       # Priors on GP hyperparameters
       if self.noise:
@@ -94,55 +95,56 @@ class GPMCMC(_surrogate):
         rc = 0
         x1 = []
         check = True
-        self.iwgp_set(iwgp,mode='pytensor')
+        warpers = self.iwgp_set(iwgp,mode='pytensor',x=x)
         for i in range(self.nx):
-          if isinstance(self.xconrevs[i],wgp):
+          if isinstance(warpers[i],wgp):
             check = False
-            x1.append(self.xconrevs[i].conmc(self.x[:,i]))
+            x1.append(warpers[i].conmc(x[:,i]))
           else:
-            x1.append(self.xc[:,i])
+            x1.append(self.xconrevs[i].con(x[:,i]))
           xin = pt.stack(x1,axis=1)
         if check:
           raise Exception('Error: iwgp set to true but none of xconrevs are wgp classes')
       else:
-        xin = self.xc
+        xin = np.zeros_like(x)
+        for i in range(self.nx):
+          xin[:,i] = self.xconrevs[i].con(x[:,i])
 
       # Output warping
       if cwgp:
-        yc = self.yconrevs[0]
-        if not isinstance(yc,wgp):
+        if not isinstance(self.yconrevs[0],wgp):
           raise Exception('Error: cwgp set to true but yconrevs class is not wgp')
-        npar = yc.np
+        npar = self.yconrevs[0].np
         if npar == 0:
           raise Exception('Error: cwgp set to true but wgp class has no tuneable parameters')
         rc = 0
         rcpos = 0
         for i in range(npar):
-          if yc.pos[i]:
+          if self.yconrevs[0].pos[i]:
             rcpos += 1
           else:
             rc += 1
         if rcpos > 0:
           cwgpp = pm.TruncatedNormal('cwgp_pos',mu=1.0,sigma=1.0,\
-              lower=1e-3,upper=10.0,shape=rcpos)
+              lower=1e-3,upper=5.0,shape=rcpos)
         if rc > 0:
-          cwgp = pm.Normal('cwgp',mu=0.0,sigma=1.0,shape=rc)
+          cwgp = pm.TruncatedNormal('cwgp',mu=0.0,sigma=1.0,\
+              lower=-5,upper=5,shape=rc)
         rc = 0
         rcpos = 0
         rvs = []
         for i in range(npar):
-          if yc.pos[i]:
+          if self.yconrevs[0].pos[i]:
             rvs.append(cwgpp[rcpos])
             rcpos += 1
           else:
             rvs.append(cwgp[rc])
             rc += 1
-        self.cwgp_set(rvs,mode='pytensor')
-        yc = self.yconrevs[0]
-        yin = yc.conmc(self.y[:,0])
-        yder = yc.dermc(self.y[:,0])
+        warper = self.cwgp_set(rvs,mode='pytensor',y=y)
+        yin = warper.conmc(y[:,0])
+        yder = warper.dermc(y[:,0])
       else:
-        yin = self.yc[:,0]
+        yin = self.yconrevs[0].con(y[:,0])
 
       # Setup kernel
       if self.kernel == 'RBF':
@@ -156,15 +158,14 @@ class GPMCMC(_surrogate):
 
       # GP and likelihood
       if cwgp:
-        kernplus = kern + pm.gp.cov.WhiteNoise(pt.sqrt(gvar))
-        K = kernplus(xin)
-        K += pt.identity_like(K)*1e-6
+        K = kern(xin)
+        K += pt.identity_like(K)*(1e-6+gvar)
         L = pt.slinalg.cholesky(K)
         beta = pt.slinalg.solve_triangular(L,yin,lower=True)
         alpha = pt.slinalg.solve_triangular(L.T,beta)
-        y = pm.Potential('ypot',-0.5*pt.dot(yin.T,alpha)\
+        y_ = pm.Potential('ypot',-0.5*pt.dot(yin.T,alpha)\
             -pt.sum(pt.log(pt.diag(L)))\
-            -0.5*self.nsamp*pt.log(2*np.pi)\
+            -0.5*nsamp*pt.log(2*np.pi)\
             +pt.sum(pt.log(yder)))
       else:
         gp = pm.gp.Marginal(cov_func=kern)
@@ -174,6 +175,9 @@ class GPMCMC(_surrogate):
       if method == 'map':
         data = pm.find_MAP(**kwargs)
         mp = copy.deepcopy(data)
+      elif method == 'none':
+        data = None
+        mp = self.hypers
       else:
         data = pm.sample(**kwargs)
         if method == 'mcmc_mean':
@@ -184,25 +188,42 @@ class GPMCMC(_surrogate):
         else:
           raise Exception('method must be one of map, mcmc_map, or mcmc_mean')
 
-    # Input warping update
-    if iwgp:
-      self.iwgp_set(mp['iwgp'])
+    if method != 'none':
+      # Input warping update
+      if iwgp:
+        self.iwgp_set(mp['iwgp'])
 
-    if cwgp:
-      rc = 0
-      rcpos = 0
-      params = []
-      for i in range(npar):
-        if yc.pos[i]:
-          params.append(mp['cwgp_pos'][rcpos])
-          rcpos += 1
-        else:
-          params.append(mp['cwgp'][rc])
-          rc += 1
-      self.cwgp_set(np.array(params))
-      with m:
-        gp = pm.gp.Marginal(cov_func=kern)
-        y_ = gp.marginal_likelihood("y", X=xin, y=self.yc[:,0], sigma=pt.sqrt(gvar))
+      # Output warping update
+      if cwgp:
+        rc = 0
+        rcpos = 0
+        params = []
+        for i in range(self.yconrevs[0].np):
+          if self.yconrevs[0].pos[i]:
+            params.append(mp['cwgp_pos'][rcpos])
+            rcpos += 1
+          else:
+            params.append(mp['cwgp'][rc])
+            rc += 1
+        self.cwgp_set(np.array(params))
+        if iwgp:
+          xin = np.zeros_like(x)
+          for i in range(self.nx):
+            xin[:,i] = self.xconrevs[i].con(x[:,i])
+        yin = self.yconrevs[0].con(y[:,0])
+        with m:
+          gp = pm.gp.Marginal(cov_func=kern)
+          y_ = gp.marginal_likelihood("y", X=xin, y=yin, sigma=pt.sqrt(gvar))
+    else:
+      if cwgp:
+        if iwgp:
+          xin = np.zeros_like(x)
+          for i in range(self.nx):
+            xin[:,i] = self.xconrevs[i].con(x[:,i])
+        yin = self.yconrevs[0].con(y[:,0])
+        with m:
+          gp = pm.gp.Marginal(cov_func=kern)
+          y_ = gp.marginal_likelihood("y", X=xin, y=yin, sigma=pt.sqrt(gvar))
 
     return m, gp, mp, data
 
@@ -236,20 +257,19 @@ class GPMCMC(_surrogate):
     return mp
 
   # Set output warping parameters
-  def cwgp_set(self,x,mode='numpy'):
+  def cwgp_set(self,params,mode='numpy',y=None):
+    if y is None:
+      y = self.y
+    warper = wgp(self.yconrevs[0].warping_names,params,y[:,0],mode=mode) 
     if mode == 'numpy':
-      update = True
+      self.change_yconrevs([warper])
     else:
-      update = False
-    self.change_yconrevs([wgp(self.yconrevs[0].warping_names,x,self.y[:,0],mode=mode)]\
-        ,update=update)
+      return warper
 
   # Set input warping parameters
-  def iwgp_set(self,x,mode='numpy'):
-    if mode == 'numpy':
-      update = True
-    else:
-      update = False
+  def iwgp_set(self,params,mode='numpy',x=None):
+    if x is None:
+      x = self.x
     xconrevs = []
     rc = 0
     for i in range(self.nx):
@@ -258,15 +278,19 @@ class GPMCMC(_surrogate):
           ran = len(self.xconrevs[i].params)
         except:
           ran = len(self.xconrevs[i].params.eval())
-        xconrevs.append(wgp(self.xconrevs[i].warping_names,x[rc:rc+ran]\
-            ,y=self.x[:,i],xdist=self.priors[i],mode=mode))
+        xconrevs.append(wgp(self.xconrevs[i].warping_names,params[rc:rc+ran]\
+            ,y=x[:,i],xdist=self.priors[i],mode=mode))
         rc += ran
       else:
         xconrevs.append(self.xconrevs[i])
-    self.change_xconrevs(xconrevs=xconrevs,update=update)
+    if mode == 'numpy':
+      self.change_xconrevs(xconrevs=xconrevs)
+    else:
+      return xconrevs
 
   # Make train-test split and populate attributes
   def train_test(self,training_frac=0.9):
+    self.nsamp = len(self.x)
     indexes = np.arange(self.nsamp)
     self.train,self.test = \
       train_test_split(indexes,train_size=training_frac)
@@ -302,7 +326,7 @@ class GPMCMC(_surrogate):
     else:
       xarg = copy.deepcopy(x)
     
-    y = self.__predict(self.gp,self.hypers,xarg,return_var)
+    y = self.__predict(self.m,self.gp,self.hypers,xarg,return_var)
 
     if revert:
       for i in range(self.ny):
@@ -314,7 +338,7 @@ class GPMCMC(_surrogate):
     return y
 
   # Private predict method with more flexibility to act on any provided GPy model
-  def __predict(self,gp,hyps,x,return_var=False):
+  def __predict(self,m,gp,hyps,x,return_var=False):
     if self.verbose:
       print('Predicting...')
     t0 = stopwatch()
@@ -339,7 +363,7 @@ class GPMCMC(_surrogate):
         yvarpreds = np.r_[yvarpreds,outs[i][1]]
       #ray.shutdown()
     else:
-      with self.m:
+      with m:
         ypreds, yvarpreds = gp.predict(x, point=hyps,  diag=True)
     t1 = stopwatch()
     if self.verbose:
@@ -540,72 +564,61 @@ class GPMCMC(_surrogate):
 
     return m, gp, mp, data
 
-  """
   # Assess GP performance with several test plots and RMSE calcs
-  def test_plots(self,restarts=10,revert=True,yplots=True,xplots=True,opt=True):
+  def test_plots(self,revert=True,yplots=True,xplots=True\
+      ,iwgp=False,cwgp=False,method='none'):
     # Creat train-test sets if none exist
-    #if self.xtrain is None:
     if self.train is None:
       self.train_test()
-    self.xtrain = self.xc[self.train,:]
-    self.xtest = self.xc[self.test,:]
-    self.ytrain = self.yc[self.train,:]
-    self.ytest = self.yc[self.test,:]
+    self.xtrain = self.x[self.train,:]
+    self.xtest = self.x[self.test,:]
+    self.ytrain = self.y[self.train,:]
+    self.ytest = self.y[self.test,:]
+
     # Train model on training set and make predictions on xtest data
-    if self.m is None:
-      mtrain = self.__fit(self.xtrain,self.ytrain,restarts=restarts,opt=opt)
-    else:
-      mtrain = copy.deepcopy(self.m)
-      mtrain.set_XY(self.xtrain,self.ytrain)
-      if opt:
-        mtrain.optimize_restarts(restarts,robust=True,verbose=self.verbose)
-        #mtrain.kern.lengthscale = self.m.kern.lengthscale
-        #mtrain.kern.variance = self.m.kern.variance
-        #mtrain.Gaussian_noise.variance = self.m.Gaussian_noise.variance
-    #ypred,ypred_var = mtrain.predict(self.xtest)
-    ypred = self.__predict(mtrain,self.xtest,return_var=False)
+    m, gp, hypers, data = self.__fit(self.xtrain,self.ytrain,method,iwgp,cwgp)
+    if self.verbose:
+      print(hypers)
+    xtest = np.zeros_like(self.xtest)
+    for i in range(self.nx):
+      xtest[:,i] = self.xconrevs[i].con(self.xtest[:,i])
+    ypred = self.__predict(m,gp,hypers,xtest,return_var=False)
+
     # Either revert data to original for comparison or leave as is
     if revert:
-      xtest = np.zeros_like(self.xtest)
-      ytest = np.zeros_like(self.ytest)
-      for i in range(self.nx):
-        xtest[:,i] = self.xconrevs[i].rev(self.xtest[:,i])
-      for i in range(self.ny):
-        ypred[:,i] = self.yconrevs[i].rev(ypred[:,i])
-        ytest[:,i] = self.yconrevs[i].rev(self.ytest[:,i])
-    else: 
       xtest = self.xtest
       ytest = self.ytest
+      ypred = self.yconrevs[0].rev(ypred[:,0])
+    else: 
+      ytest = self.yconrevs[0].con(self.ytest[:,0])
+
     # RMSE for each y variable
-    #print('')
-    for i in range(self.ny):
-      rmse = np.sqrt(np.sum((ypred[:,i]-ytest[:,i])**2)/len(ytest[:,i]))
-      if self.verbose:
-        print(f'RMSE for y[{i}] is: {rmse}')
+    rmse = np.sqrt(np.sum((ypred-ytest)**2)/len(ytest))
+    if self.verbose:
+      print(f'RMSE for y is: {rmse:0.5e}')
     # Compare ytest and predictions for each output variable
     if yplots:
-      for i in range(self.ny):
-        plt.title(f'y[{i}]')
-        plt.plot(ytest[:,i],ytest[:,i],'-',label='True')
-        plt.plot(ytest[:,i],ypred[:,i],'X',label='GP')
-        plt.ylabel(f'y[{i}]')
-        plt.xlabel(f'y[{i}]')
-        plt.legend()
-        plt.show()
+      plt.title(f'y')
+      plt.plot(ytest,ytest,'-',label='True')
+      plt.plot(ytest,ypred,'X',label='GP')
+      plt.ylabel(f'y')
+      plt.xlabel(f'y')
+      plt.legend()
+      plt.show()
     # Compare ytest and predictions wrt each input variable
     if xplots:
-      for i in range(self.ny):
-        for j in range(self.nx):
-          plt.title(f'y[{i}] wrt x[{j}]')
-          xsort = np.sort(xtest[:,j])
-          asort = np.argsort(xtest[:,j])
-          plt.plot(xsort,ypred[asort,i],label='GP')
-          plt.plot(xsort,ytest[asort,i],label='Test')
-          plt.ylabel(f'y[{i}]')
-          plt.xlabel(f'x[{j}]')
-          plt.legend()
-          plt.show()
+      for j in range(self.nx):
+        plt.title(f'y wrt x[{j}]')
+        xsort = np.sort(xtest[:,j])
+        asort = np.argsort(xtest[:,j])
+        plt.plot(xsort,ypred[asort],label='GP')
+        plt.plot(xsort,ytest[asort],label='Test')
+        plt.ylabel(f'y')
+        plt.xlabel(f'x[{j}]')
+        plt.legend()
+        plt.show()
 
+  """
   # Function which plots relative importances (inverse lengthscales)
   def relative_importances(self,original_data=False,restarts=10,scale='std_dev'):
     # Check scale arg
@@ -643,52 +656,4 @@ class GPMCMC(_surrogate):
     pg.target = None
     pg.constraints = None
     save_object(pg,fname)
-
-  # Minimise output variable using GPyOpt 
-  def bayesian_minimisation(self,max_iter=15,minmax=False,restarts=5,revert=True):
-
-    if self.ny > 1:
-      raise Exception('Bayesian minimisation only implemented for single output')
-
-    if self.verbose:
-      print('Running Bayesian minimisation...')
-    
-    # Setup domain as list of dictionaries for each variable
-    lbs = np.zeros(self.nx)
-    ubs = np.zeros(self.nx)
-    tiny = np.finfo(np.float64).tiny
-    for i in range(self.nx):
-      if minmax:
-        lbs[i] = np.min(self.xc[:,i])
-        ubs[i] = np.max(self.xc[:,i])
-      else:
-        lbs[i] = self.xconrevs[i].con(self.priors[i].ppf(tiny))
-        ubs[i] = self.xconrevs[i].con(self.priors[i].isf(tiny))
-    bnds = Bounds(lb=lbs,ub=ubs)
-
-    ## TODO: Constraint setup
-    
-    # Setup objective function which is target plus conversion/reversion
-    def target_transform(xc):
-      xr = np.zeros_like(xc)
-      for i in range(self.nx):
-        xr[i] = self.xconrevs[i].rev(xc[i])
-      yr = self.target(xr)
-      yc = self.yconrevs[0].con(yr)
-      return yc
-
-    # Run optimisation
-    res = self._core__opt(target_transform,'BO',self.nx,restarts,\
-        bounds=bnds,max_iter=max_iter)
-
-    xopt = res.x
-    yopt = res.fun
-
-    # Revert to original data
-    if revert:
-      yopt = self.yconrevs[0].rev(yopt)
-      for i in range(self.nx):
-        xopt[i] = self.xconrevs[i].rev(xopt[i])
-
-    return xopt,yopt
   """

@@ -211,20 +211,18 @@ class _surrogate(LHC):
       self.yc[:,i] = self.yconrevs[i].con(self.y[:,i])
 
   # Allow for changing conversion/reversion methods
-  def change_xconrevs(self,xconrevs=None,update=True):
+  def change_xconrevs(self,xconrevs=None):
     # Check and set new lists, then update converted datasets
     self.__conrev_check(xconrevs,yconrevs=self.yconrevs)
-    if update:
-      for i in range(self.nx):
-        self.xc[:,i] = self.xconrevs[i].con(self.x[:,i])
+    for i in range(self.nx):
+      self.xc[:,i] = self.xconrevs[i].con(self.x[:,i])
 
   # Allow for changing conversion/reversion methods
-  def change_yconrevs(self,yconrevs=None,update=True):
+  def change_yconrevs(self,yconrevs=None):
     # Check and set new lists, then update converted datasets
     self.__conrev_check(self.xconrevs,yconrevs)
-    if update:
-      for i in range(self.ny):
-        self.yc[:,i] = self.yconrevs[i].con(self.y[:,i])
+    for i in range(self.ny):
+      self.yc[:,i] = self.yconrevs[i].con(self.y[:,i])
 
   # Converison/reversion input checking and setting (used in __init__ and change_conrevs)
   def __conrev_check(self,xconrevs,yconrevs):
