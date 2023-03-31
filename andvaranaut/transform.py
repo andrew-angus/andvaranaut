@@ -249,20 +249,20 @@ class stdshift(affine):
     self.b = 1/std
     self.default_priors = [st.norm()]
 class maxmin(affine):
-  def __init__(self,x,centred=False,safety=1e-6,mode='numpy'):
+  def __init__(self,x,centred=False,safety=0.01,mode='numpy'):
     if mode == 'numpy':
-      xmin = np.min(x)*(1-safety)
-      xmax = np.max(x)*(1+safety)
+      xmin = np.min(x)
+      xmax = np.max(x)
     else:
-      xmin = pt.min(x)*(1-safety)
-      xmax = pt.max(x)*(1+safety)
-    xminus = xmax-xmin
+      xmin = pt.min(x)
+      xmax = pt.max(x)
+    xminus = (xmax-xmin)/(1-2*safety)
     xplus = xmax+xmin
     if centred:
       self.a = -xplus/xminus
       self.b = 2/xminus
     else:
-      self.a = -xmin/xminus
+      self.a = -xmin/xminus+safety
       self.b = 1/xminus
 class uniform(affine):
   def __init__(self,dist):
