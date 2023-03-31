@@ -239,6 +239,15 @@ class stddev(affine):
       std = pt.std(y)
     self.a = 0
     self.b = 1/std
+class stdshift(affine):
+  def __init__(self,a,y,mode='numpy'):
+    if mode == 'numpy':
+      std = np.std(y)
+    else:
+      std = pt.std(y)
+    self.a = a
+    self.b = 1/std
+    self.default_priors = [st.norm()]
 class maxmin(affine):
   def __init__(self,x,centred=False,safety=1e-6,mode='numpy'):
     if mode == 'numpy':
@@ -397,7 +406,7 @@ class wgp:
   def __init__(self,warpings,params,y=None,xdist=None,mode='numpy'):
     allowed = ['affine','logarithm','arcsinh','boxcox','sinharcsinh','sal', \
                'meanstd','boxcoxf','uniform','maxmin','kumaraswamy','pzero',\
-               'stddev']
+               'stddev','stdshift']
     self.warping_names = warpings
     self.warpings = []
     self.params = params
@@ -437,7 +446,7 @@ class wgp:
         self.pos[pc:pc+1] = np.array([False],dtype=np.bool_)
         self.default_priors.extend(self.warpings[-1].default_priors)
         pc += 1
-      if i == 'sinharcsinh':
+      elif i == 'sinharcsinh':
         self.warpings.append(sinharcsinh(params[pc],params[pc+1]))
         self.pos[pc:pc+2] = np.array([False,True],dtype=np.bool_)
         self.default_priors.extend(self.warpings[-1].default_priors)
@@ -447,11 +456,18 @@ class wgp:
         self.pos[pc:pc+4] = np.array([False,True,False,True],dtype=np.bool_)
         self.default_priors.extend(self.warpings[-1].default_priors)
         pc += 4
-      if i == 'kumaraswamy':
+      elif i == 'kumaraswamy':
         self.warpings.append(kumaraswamy(params[pc],params[pc+1]))
         self.pos[pc:pc+2] = np.array([True,True],dtype=np.bool_)
         self.default_priors.extend(self.warpings[-1].default_priors)
         pc += 2
+      elif i == 'stdshift':
+        if y is None:
+          raise Exception('Must supply y array to use stddev')
+        self.warpings.append(stdshift(params[pc],yc,mode=mode))
+        self.pos[pc] = np.array([False],dtype=np.bool_)
+        self.default_priors.extend(self.warpings[-1].default_priors)
+        pc += 1
       elif i == 'meanstd':
         if y is None:
           raise Exception('Must supply y array to use meanstd')
