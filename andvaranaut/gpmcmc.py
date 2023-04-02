@@ -587,15 +587,17 @@ class GPMCMC(_surrogate):
     # Either revert data to original for comparison or leave as is
     if revert:
       xtest = self.xtest
-      ytest = self.ytest
+      ytest = self.ytest[:,0]
       ypred = self.yconrevs[0].rev(ypred[:,0])
     else: 
       ytest = self.yconrevs[0].con(self.ytest[:,0])
 
     # RMSE for each y variable
-    rmse = np.sqrt(np.sum((ypred-ytest)**2)/len(ytest))
+    rmse = np.sqrt(np.mean(np.power(ypred-ytest,2)))
+    mea = np.mean(np.abs(ypred-ytest))
     if self.verbose:
       print(f'RMSE for y is: {rmse:0.5e}')
+      print(f'Mean absoulte error for y is: {mea:0.5e}')
     # Compare ytest and predictions for each output variable
     if yplots:
       plt.title(f'y')
