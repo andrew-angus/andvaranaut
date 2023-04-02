@@ -356,15 +356,15 @@ class sal:
       pass
     self.default_priors = [st.norm(),st.norm(),st.norm(),st.norm()]
   def con(self,y):
-    return self.a + self.b*np.sinh(self.d*np.arcsinh(y)-self.c)
+    return self.c + self.d*np.sinh(self.b*np.arcsinh(y)-self.a)
   def rev(self,y):
-    return np.sinh((np.arcsinh((y-self.a)/self.b)+self.c)/self.d)
+    return np.sinh((np.arcsinh((y-self.c)/self.d)+self.a)/self.b)
   def der(self,y):
-    return self.b*self.d*np.cosh(self.d*np.arcsinh(y)-self.c)/np.sqrt(1+np.power(y,2))
+    return self.b*self.d*np.cosh(self.b*np.arcsinh(y)-self.a)/np.sqrt(1+np.power(y,2))
   def conmc(self,y):
-    return self.a + self.b*pt.sinh(self.d*pt.arcsinh(y)-self.c)
+    return self.c + self.d*pt.sinh(self.b*pt.arcsinh(y)-self.a)
   def dermc(self,y):
-    return self.b*self.d*pt.cosh(self.d*pt.arcsinh(y)-self.c)/pt.sqrt(1+pt.power(y,2))
+    return self.b*self.d*pt.cosh(self.b*pt.arcsinh(y)-self.a)/pt.sqrt(1+pt.power(y,2))
 
 # Input warping with kumaraswamy distribution
 class kumaraswamy:
