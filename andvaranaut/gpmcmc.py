@@ -318,7 +318,7 @@ class GPMCMC(_surrogate):
     return super().y_dist(mode,nsamps,return_data,surrogate,self.predict)
 
   # Standard predict method which wraps the GPy predict and allows for parallelism
-  def predict(self,x,return_var=False,convert=True,revert=True):
+  def predict(self,x,return_var=False,convert=True,revert=True,normvar=True):
     if convert:
       xarg = np.zeros_like(x)
       for i in range(self.nx):
@@ -326,19 +326,38 @@ class GPMCMC(_surrogate):
     else:
       xarg = copy.deepcopy(x)
     
-    y = self.__predict(self.m,self.gp,self.hypers,xarg,return_var)
+    y, yv = self.__predict(self.m,self.gp,self.hypers,xarg)
 
     if revert:
-      for i in range(self.ny):
-        y[0][:,i] = self.yconrevs[i].rev(y[0][:,i])
+      y,yv = self.__gh_stats(y,yv,normvar)
 
-    if self.verbose:
-      print("warning: reversion of variance not implemented")
+      # Median
+      #y[:,0] = self.yconrevs[0].rev(y[:,0])
 
-    return y
+    if return_var:
+      return y, yv
+    else:
+      return y
+
+  # Get mean and variance of reverted variable by Gauss-Hermite quadrature
+  def __gh_stats(self,y,yv,normvar=True,deg=5):
+    # Mean
+    xi,wi = np.polynomial.hermite.hermgauss(deg)
+    for i in range(len(y)):
+      yi = np.sqrt(2*yv[i,0])*xi+y[i,0]
+      yir = self.yconrevs[0].rev(yi)
+      yir2 = np.power(yir,2)
+      y[i,0] = 1/np.sqrt(np.pi)*np.sum(wi*yir)
+      ym2 = 1/np.sqrt(np.pi)*np.sum(wi*yir2)
+      yv[i,0] = ym2-y[i,0]**2
+
+    if normvar:
+      yv /= np.var(self.y)
+
+    return y, yv
 
   # Private predict method with more flexibility to act on any provided GPy model
-  def __predict(self,m,gp,hyps,x,return_var=False):
+  def __predict(self,m,gp,hyps,x):
     if self.verbose:
       print('Predicting...')
     t0 = stopwatch()
@@ -368,10 +387,7 @@ class GPMCMC(_surrogate):
     t1 = stopwatch()
     if self.verbose:
       print(f'Time taken: {t1-t0:0.2f} s')
-    if return_var:
-      return ypreds.reshape((-1,1)),yvarpreds.reshape((-1,1))
-    else:
-      return ypreds.reshape((-1,1))
+    return ypreds.reshape((-1,1)),yvarpreds.reshape((-1,1))
 
   # Minimise output variable using GPyOpt 
   def bayesian_minimisation(self,max_iter=15,minmax=False,restarts=5,revert=True):
@@ -582,13 +598,15 @@ class GPMCMC(_surrogate):
     xtest = np.zeros_like(self.xtest)
     for i in range(self.nx):
       xtest[:,i] = self.xconrevs[i].con(self.xtest[:,i])
-    ypred = self.__predict(m,gp,hypers,xtest,return_var=False)
+    ypred, yvars = self.__predict(m,gp,hypers,xtest)
 
     # Either revert data to original for comparison or leave as is
     if revert:
       xtest = self.xtest
       ytest = self.ytest[:,0]
-      ypred = self.yconrevs[0].rev(ypred[:,0])
+      #ypred = self.yconrevs[0].rev(ypred[:,0])
+      ypred, yvars = self.__gh_stats(ypred,yvars,normvar=False)
+      ypred = ypred[:,0]; yvars = yvars[:,0]
     else: 
       ytest = self.yconrevs[0].con(self.ytest[:,0])
 
@@ -602,7 +620,8 @@ class GPMCMC(_surrogate):
     if yplots:
       plt.title(f'y')
       plt.plot(ytest,ytest,'-',label='True')
-      plt.plot(ytest,ypred,'X',label='GP')
+      plt.errorbar(ytest,ypred,fmt='x',yerr=np.sqrt(yvars),\
+          label='GP',capsize=3)
       plt.ylabel(f'y')
       plt.xlabel(f'y')
       plt.legend()
@@ -611,10 +630,11 @@ class GPMCMC(_surrogate):
     if xplots:
       for j in range(self.nx):
         plt.title(f'y wrt x[{j}]')
-        xsort = np.sort(xtest[:,j])
-        asort = np.argsort(xtest[:,j])
-        plt.plot(xsort,ypred[asort],label='GP')
-        plt.plot(xsort,ytest[asort],label='Test')
+        #xsort = np.sort(xtest[:,j])
+        #asort = np.argsort(xtest[:,j])
+        plt.plot(xtest[:,j],ytest,'.',label='Test')
+        plt.errorbar(xtest[:,j],ypred,fmt='x',yerr=np.sqrt(yvars),\
+            label='GP',capsize=3)
         plt.ylabel(f'y')
         plt.xlabel(f'x[{j}]')
         plt.legend()
