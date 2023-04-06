@@ -63,15 +63,15 @@ class GPMCMC(_surrogate):
 
   # Fit GP standard method
   def fit(self,method='map',return_data=False,\
-      iwgp=False,cwgp=False,**kwargs):
+      iwgp=False,cwgp=False,jitter=1e-6,**kwargs):
     self.m, self.gp, self.hypers, data = self.__fit(self.x,self.y,\
-        method,iwgp,cwgp,**kwargs)
+        method,iwgp,cwgp,jitter,**kwargs)
 
     if return_data:
       return data
 
   # More flexible private fit method which can use unconverted or train-test datasets
-  def __fit(self,x,y,method,iwgp,cwgp,**kwargs):
+  def __fit(self,x,y,method,iwgp,cwgp,jitter=1e-6,**kwargs):
     
     # PyMC context manager
     m = pm.Model()
@@ -159,7 +159,7 @@ class GPMCMC(_surrogate):
       # GP and likelihood
       if cwgp:
         K = kern(xin)
-        K += pt.identity_like(K)*(1e-6+gvar)
+        K += pt.identity_like(K)*(jitter+gvar)
         L = pt.slinalg.cholesky(K)
         beta = pt.slinalg.solve_triangular(L,yin,lower=True)
         alpha = pt.slinalg.solve_triangular(L.T,beta)
@@ -169,7 +169,8 @@ class GPMCMC(_surrogate):
             +pt.sum(pt.log(yder)))
       else:
         gp = pm.gp.Marginal(cov_func=kern)
-        y_ = gp.marginal_likelihood("y", X=xin, y=yin, noise=pt.sqrt(gvar))
+        y_ = gp.marginal_likelihood("y", X=xin, y=yin, sigma=pt.sqrt(gvar), \
+            jitter=jitter)
 
       # Fit and process results depending on method
       if method == 'map':
@@ -329,6 +330,7 @@ class GPMCMC(_surrogate):
     y, yv = self.__predict(self.m,self.gp,self.hypers,xarg)
 
     if revert:
+      #print(self.yconrevs[0].rev(y[:,0]),yv)
       y,yv = self.__gh_stats(y,yv,normvar)
 
       # Median
@@ -340,7 +342,7 @@ class GPMCMC(_surrogate):
       return y
 
   # Get mean and variance of reverted variable by Gauss-Hermite quadrature
-  def __gh_stats(self,y,yv,normvar=True,deg=5):
+  def __gh_stats(self,y,yv,normvar=True,deg=8):
     # Mean
     xi,wi = np.polynomial.hermite.hermgauss(deg)
     for i in range(len(y)):
