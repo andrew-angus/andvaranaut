@@ -199,8 +199,10 @@ class logarithm:
     return np.exp(y)
   def der(self,y):
     return 1/y
-  def conmc(self,y,rvs):
+  def conmc(self,y):
     return pt.log(y)
+  def dermc(self,y):
+    return 1/y
 class affine:
   def __init__(self,a,b):
     self.a = a
@@ -318,9 +320,9 @@ class boxcox:
 # Box cox as above but auto fitted with scikit-learn
 class boxcoxf(boxcox):
   def __init__(self,y):
-    pt = PowerTransformer(method='box-cox',standardize=False)
-    pt.fit(y.reshape(-1,1))
-    self.lamb = pt.lambdas_[0]
+    powt = PowerTransformer(method='box-cox',standardize=False)
+    powt.fit(y.reshape(-1,1))
+    self.lamb = powt.lambdas_[0]
 class sinharcsinh:
   def __init__(self,a,b):
     self.a = a
