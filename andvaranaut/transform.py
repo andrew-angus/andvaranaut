@@ -233,6 +233,14 @@ class meanstd(affine):
       std = pt.std(y)
     self.a = -mean/std
     self.b = 1/std
+class minshift(affine):
+  def __init__(self,y,mode='numpy',safety=1000):
+    if mode == 'numpy':
+      mini = np.min(y)
+    else:
+      mini = pt.min(y)
+    self.a = -mini*safety
+    self.b = 1.0
 class stddev(affine):
   def __init__(self,y,mode='numpy'):
     if mode == 'numpy':
@@ -408,7 +416,7 @@ class wgp:
   def __init__(self,warpings,params,y=None,xdist=None,mode='numpy'):
     allowed = ['affine','logarithm','arcsinh','boxcox','sinharcsinh','sal', \
                'meanstd','boxcoxf','uniform','maxmin','kumaraswamy','pzero',\
-               'stddev','stdshift']
+               'stddev','stdshift','minshift']
     self.warping_names = warpings
     self.warpings = []
     self.params = params
@@ -474,6 +482,10 @@ class wgp:
         if y is None:
           raise Exception('Must supply y array to use meanstd')
         self.warpings.append(meanstd(yc,mode=mode))
+      elif i == 'minshift':
+        if y is None:
+          raise Exception('Must supply y array to use minshift')
+        self.warpings.append(minshift(yc,mode=mode))
       elif i == 'stddev':
         if y is None:
           raise Exception('Must supply y array to use stddev')
