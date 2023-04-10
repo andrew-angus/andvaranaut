@@ -10,8 +10,8 @@ import copy
 from sklearn.model_selection import train_test_split
 from functools import partial
 from andvaranaut.core import _core,save_object
-from andvaranaut.lhc import _surrogate
-from andvaranaut.transform import wgp
+from andvaranaut.lhc import LHC
+from andvaranaut.transform import wgp,kumaraswamy
 import ray
 import pymc as pm
 import arviz as az
@@ -19,52 +19,161 @@ import pytensor.tensor as pt
 from scipy.optimize import Bounds
 from scipy.stats._continuous_distns import uniform_gen, norm_gen
 
+# Zero mean function
+def zero_mean(x):
+  ret = np.array([0.0])
+  return ret
+
 # Inherit from surrogate class and add GP specific methods
-class GPMCMC(_surrogate):
-  def __init__(self,kernel='RBF',noise=True,prior_dict=None,**kwargs):
+class GPMCMC(LHC):
+  def __init__(self,xconrevs=None,yconrevs=None,\
+      kernel='RBF',noise=True,mean=None,**kwargs):
+    # Call LHC init, then validate and set now data conversion/reversion attributes
     super().__init__(**kwargs)
-    self.change_model(kernel,noise)
-    self.set_prior_dict(prior_dict)
+    self.xc = copy.deepcopy(self.x)
+    self.yc = copy.deepcopy(self.y)
+    self.__conrev_check(xconrevs,yconrevs)
+    if mean is None:
+      mean = 0
+    self.change_model(kernel,noise,mean)
+    self.__scrub_train_test()
+    self.ym = np.empty((0,1))
+
+  # Conversion of last n samples
+  def __con(self,nsamps):
+    self.xc = np.r_[self.xc,np.zeros((nsamps,self.nx))]
+    self.yc = np.r_[self.yc,np.zeros((nsamps,self.ny))]
+    for i in range(self.nx):
+      self.xc[-nsamps:,i] = self.xconrevs[i].con(self.x[-nsamps:,i])
+    for i in range(self.ny):
+      self.yc[-nsamps:,i] = \
+          self.yconrevs[i].con(self.y[-nsamps:,i]-self.ym[-nsamps:,i])
+
+  # Inherit from lhc __del_samples and add converted dataset deletion
+  def del_samples(self,ndels=None,method='coarse_lhc',idx=None):
+    returned = super()._LHC__del_samples(ndels,method,idx,returns=True)
+    if method == 'coarse_lhc':
+      for i in range(ndels):
+        self.xc = np.delete(self.xc,returned[i],axis=0)
+        self.yc = np.delete(self.yc,returned[i],axis=0)
+        self.ym = np.delete(self.ym,returned[i],axis=0)
+    elif method == 'random':
+      self.xc = self.xc[returned,:]
+      self.yc = self.yc[returned,:]
+      self.ym = self.ym[returned,:]
+    elif method == 'specific':
+      self.xc = self.xc[returned]
+      self.yc = self.yc[returned]
+      self.ym = self.ym[returned]
     self.__scrub_train_test()
 
-  # Set prior dictionary, defaulting to lognormals on hypers
-  def set_prior_dict(self,prior_dict):
-    if prior_dict is None:
-      prior_dict = {}
-      if self.noise:
-        prior_dict['hypers'] = [st.norm() for i in range(5)]
-      else:
-        prior_dict['hypers'] = [st.norm() for i in range(4)]
-    self.prior_dict = prior_dict
+  # Allow for changing conversion/reversion methods
+  def change_conrevs(self,xconrevs=None,yconrevs=None):
+    # Check and set new lists, then update converted datasets
+    self.__conrev_check(xconrevs,yconrevs)
+    for i in range(self.nx):
+      self.xc[:,i] = self.xconrevs[i].con(self.x[:,i])
+    for i in range(self.ny):
+      self.yc[:,i] = self.yconrevs[i].con(self.y[:,i]-self.ym[:,i])
+
+  # Allow for changing conversion/reversion methods
+  def change_xconrevs(self,xconrevs=None):
+    # Check and set new lists, then update converted datasets
+    self.__conrev_check(xconrevs,yconrevs=self.yconrevs)
+    for i in range(self.nx):
+      self.xc[:,i] = self.xconrevs[i].con(self.x[:,i])
+
+  # Allow for changing conversion/reversion methods
+  def change_yconrevs(self,yconrevs=None):
+    # Check and set new lists, then update converted datasets
+    self.__conrev_check(self.xconrevs,yconrevs)
+    for i in range(self.ny):
+      self.yc[:,i] = self.yconrevs[i].con(self.y[:,i]-self.ym[:,i])
+
+  # Converison/reversion input checking and setting (used in __init__ and change_conrevs)
+  def __conrev_check(self,xconrevs,yconrevs):
+    if xconrevs is None:
+      xconrevs = [None for i in range(self.nx)]
+    if yconrevs is None:
+      yconrevs = [None for i in range(self.ny)]
+    if not isinstance(xconrevs,list) or len(xconrevs) != self.nx:
+      raise Exception(\
+          "Error: xconrevs must be None or list of conversion/reversion classes of size nx")
+    if not isinstance(yconrevs,list) or len(yconrevs) != self.ny:
+      raise Exception(\
+          "Error: xconrevs must be None or list of conversion/reversion classes of size nx")
+    for j,i in enumerate(xconrevs+yconrevs):
+      if (i is not None) and ((not callable(i.con)) or (not callable(i.rev))):
+        raise Exception(\
+            'Error: Provided data conversion/reversion function not callable.')
+      elif i is None:
+        if j < self.nx:
+          xconrevs[j] = _none_conrev()
+        else:
+          yconrevs[j-self.nx] = _none_conrev()
+    self.xconrevs = xconrevs
+    self.yconrevs = yconrevs
+
+  # Optionally set x and y attributes with existing datasets
+  def set_data(self,x,y):
+    super().set_data(x,y)
+    self.xc = np.empty((0,self.nx))
+    self.yc = np.empty((0,self.ny))
+
+    # Evaluate mean function
+    xm,ym = self._core__vector_solver(self.x,self.mean)
+    if len(xm) != len(self.x):
+      raise Exception("Mean function not valid at every x point in dataset")
+    self.ym = np.r_[self.ym,ym]
+
+    # Get converted values
+    self.__con(self.nsamp)
+
+    # Scrub train test
+    self.__scrub_train_test()
+
+  # Inherit and extend y_dist to have dist by surrogate predictions
+  def y_dist(self,mode='hist_kde',nsamps=None,return_data=False,surrogate=True):
+    # Allow for use of surrogate evaluations or underlying datasets
+    if surrogate:
+      xsamps = super()._LHC__latin_sample(nsamps)
+      xcons = np.zeros((nsamps,self.nx))
+      for i in range(self.nx):
+        xcons[:,i] = self.xconrevs[i].con(xsamps[:,i])
+      ypreds = self.predict(xcons)
+      yrevs = np.zeros((nsamps,self.ny))
+      for i in range(self.ny):
+        yrevs[:,i] = self.yconrevs[i].rev(ypreds[:,i])
+      amax = np.argmax(ypreds)
+      idx = (amax//self.ny,amax%self.ny)
+      super()._LHC__y_dist(yrevs,mode)
+      if return_data:
+        return xsamps,yrevs
+    elif not surrogate:
+      super().y_dist(mode)
+    else:
+      raise Exception("Error: surrogate argument must be of type bool")
 
   def __scrub_train_test(self):
-    self.xtrain = None
-    self.xtest = None
-    self.ytrain = None
-    self.ytest = None
     self.train = None
     self.test = None
 
   # Sample method inherits lhc sampling and adds adaptive sampling option
-  def sample(self,nsamps,method='lhc',batchsize=1,restarts=10,\
-      seed=None,opt_method='DE',opt_restarts=10):
-    methods = ['lhc','adaptive']
-    if method not in methods:
-      raise Exception(f'Error: method must be one of {methods}')
-    if method == 'lhc':
-      super().sample(nsamps,seed)
-    else:
-      raise Exception('No other method implemented, choose LHC')
+  def sample(self,nsamps,seed=None):
+    # Evaluate samples
+    super().sample(nsamps,seed)
+    self.__con(len(self.x))
 
-  # Inherit del_samples and extend to remove test-train datasets
-  def del_samples(self,ndels=None,method='coarse_lhc',idx=None):
-    super().del_samples(ndels,method,idx)
-    self.__scrub_train_test()
+    # Evaluate mean function
+    xm,ym = self._core__vector_solver(self.x,self.mean)
+    if len(xm) != len(self.x):
+      raise Exception("Mean function not valid at every x point in dataset")
+    self.ym = np.r_[self.ym,ym]
 
   # Fit GP standard method
   def fit(self,method='map',return_data=False,\
       iwgp=False,cwgp=False,jitter=1e-6,**kwargs):
-    self.m, self.gp, self.hypers, data = self.__fit(self.x,self.y,\
+    self.m, self.gp, self.hypers, data = self.__fit(self.x,self.y-self.ym,\
         method,iwgp,cwgp,jitter,**kwargs)
 
     if return_data:
@@ -125,11 +234,14 @@ class GPMCMC(_surrogate):
           else:
             rc += 1
         if rcpos > 0:
+          #cwgpp = pm.TruncatedNormal('cwgp_pos',mu=1.0,sigma=1.0,\
+          #    lower=1e-3,upper=10.0,shape=rcpos)
           cwgpp = pm.TruncatedNormal('cwgp_pos',mu=1.0,sigma=1.0,\
-              lower=1e-3,upper=5.0,shape=rcpos)
+              lower=1e-15,upper=10.0,shape=rcpos)
         if rc > 0:
-          cwgp = pm.TruncatedNormal('cwgp',mu=0.0,sigma=1.0,\
-              lower=-5,upper=5,shape=rc)
+          #cwgp = pm.TruncatedNormal('cwgp',mu=0.0,sigma=1.0,\
+          #    lower=-10,upper=10,shape=rc)
+          cwgp = pm.Normal('cwgp',mu=0.0,sigma=1.0,shape=rc)
         rc = 0
         rcpos = 0
         rvs = []
@@ -189,6 +301,7 @@ class GPMCMC(_surrogate):
         else:
           raise Exception('method must be one of map, mcmc_map, or mcmc_mean')
 
+    # If method is none do not perform optimisation/sampling
     if method != 'none':
       # Input warping update
       if iwgp:
@@ -260,7 +373,7 @@ class GPMCMC(_surrogate):
   # Set output warping parameters
   def cwgp_set(self,params,mode='numpy',y=None):
     if y is None:
-      y = self.y
+      y = self.y-self.ym
     warper = wgp(self.yconrevs[0].warping_names,params,y[:,0],mode=mode) 
     if mode == 'numpy':
       self.change_yconrevs([warper])
@@ -297,8 +410,26 @@ class GPMCMC(_surrogate):
       train_test_split(indexes,train_size=training_frac)
 
   # Method to change noise/kernel attributes, scrubs any saved model
-  def change_model(self,kernel,noise):
+  def change_model(self,kernel=None,noise=None,mean=None):
     kerns = ['RBF','Matern52','Matern32','Exponential']
+    if kernel is None:
+      kernel = self.kernel
+    if noise is None:
+      noise = self.noise
+    if mean is None:
+      changed = False
+    elif mean == 0:
+      self.mean = zero_mean
+      xm,ym = self._core__vector_solver(self.x,self.mean)
+      if len(xm) != len(self.x):
+        raise Exception("Mean function not valid at every x point in dataset")
+      self.ym = ym
+    else:
+      self.mean = mean
+      xm,ym = self._core__vector_solver(self.x,self.mean)
+      if len(xm) != len(self.x):
+        raise Exception("Mean function not valid at every x point in dataset")
+      self.ym = ym
     if kernel not in kerns:
       raise Exception(f"Error: kernel must be one of {kerns}")
     if not isinstance(noise,bool):
@@ -309,15 +440,6 @@ class GPMCMC(_surrogate):
     self.gp = None
     self.hypers = None
 
-  # Inherit set_data method and scrub train-test sets
-  def set_data(self,x,y):
-    super().set_data(x,y)
-    self.__scrub_train_test()
-
-  # Inherit and extend y_dist to have dist by surrogate predictions
-  def y_dist(self,mode='hist_kde',nsamps=None,return_data=False,surrogate=True):
-    return super().y_dist(mode,nsamps,return_data,surrogate,self.predict)
-
   # Standard predict method which wraps the GPy predict and allows for parallelism
   def predict(self,x,return_var=False,convert=True,revert=True,normvar=True):
     if convert:
@@ -326,15 +448,14 @@ class GPMCMC(_surrogate):
         xarg[:,i] = self.xconrevs[i].con(x[:,i])
     else:
       xarg = copy.deepcopy(x)
+      for i in range(self.nx):
+        x[:,i] = self.xconrevs[i].rev(x[:,i])
     
     y, yv = self.__predict(self.m,self.gp,self.hypers,xarg)
 
     if revert:
-      #print(self.yconrevs[0].rev(y[:,0]),yv)
-      y,yv = self.__gh_stats(y,yv,normvar)
-
-      # Median
-      #y[:,0] = self.yconrevs[0].rev(y[:,0])
+      # Revert transforms
+      y,yv = self.__gh_stats(x,y,yv,normvar)
 
     if return_var:
       return y, yv
@@ -342,12 +463,12 @@ class GPMCMC(_surrogate):
       return y
 
   # Get mean and variance of reverted variable by Gauss-Hermite quadrature
-  def __gh_stats(self,y,yv,normvar=True,deg=8):
+  def __gh_stats(self,x,y,yv,normvar=True,deg=8):
     # Mean
     xi,wi = np.polynomial.hermite.hermgauss(deg)
     for i in range(len(y)):
       yi = np.sqrt(2*yv[i,0])*xi+y[i,0]
-      yir = self.yconrevs[0].rev(yi)
+      yir = self.yconrevs[0].rev(yi)+self.mean(x[i,:])
       yir2 = np.power(yir,2)
       y[i,0] = 1/np.sqrt(np.pi)*np.sum(wi*yir)
       ym2 = 1/np.sqrt(np.pi)*np.sum(wi*yir2)
@@ -421,7 +542,8 @@ class GPMCMC(_surrogate):
       for i in range(self.nx):
         xr[i] = self.xconrevs[i].rev(xc[i])
       xr,yr = self._core__vector_solver(np.array([xr]))
-      yc = self.yconrevs[0].con(yr[:,0])
+      xm,ym = self._core__vector_solver(np.array([xr]),self.mean)
+      yc = self.yconrevs[0].con(yr[:,0]-ym[:,0])
       # Update database with new BO samples
       self.x = np.r_[self.x,xr]
       self.y = np.r_[self.y,yr]
@@ -439,7 +561,7 @@ class GPMCMC(_surrogate):
 
       # Revert to original data
       if revert:
-        yopt = self.yconrevs[0].rev(yopt)
+        yopt = self.yconrevs[0].rev(yopt)+self.mean(xopt)
         for i in range(self.nx):
           xopt[i] = self.xconrevs[i].rev(xopt[i])
 
@@ -454,6 +576,123 @@ class GPMCMC(_surrogate):
 
     return xopt,yopt
 
+
+  # Assess GP performance with several test plots and RMSE calcs
+  def test_plots(self,revert=True,yplots=True,xplots=True,logscale=False\
+      ,iwgp=False,cwgp=False,method='none',errorbars=True):
+    # Creat train-test sets if none exist
+    if self.train is None:
+      self.train_test()
+    xtrain = self.x[self.train,:]
+    xtest = self.x[self.test,:]
+    ytrain = self.y[self.train,:]
+    ytest = self.y[self.test,:]
+    ymtrain = self.ym[self.train,:]
+    ymtest = self.ym[self.test,:]
+
+    # Train model on training set and make predictions on xtest data
+    m, gp, hypers, data = self.__fit(xtrain,ytrain-ymtrain,\
+        method,iwgp,cwgp)
+    if self.verbose:
+      print(hypers)
+    xctest = np.zeros_like(xtest)
+    for i in range(self.nx):
+      xctest[:,i] = self.xconrevs[i].con(xtest[:,i])
+    ypred, yvars = self.__predict(m,gp,hypers,xctest)
+
+    # Either revert data to original for comparison or leave as is
+    if revert:
+      ytest = ytest[:,0]
+      ypred, yvars = self.__gh_stats(xtest,ypred,yvars,normvar=False)
+      ypred = ypred[:,0]; yvars = yvars[:,0]
+    else: 
+      xtest = xctest
+      ytest = self.yconrevs[0].con(ytest[:,0]-ymtest[:,0])
+
+    # RMSE for each y variable
+    rmse = np.sqrt(np.mean(np.power(ypred-ytest,2)))
+    mea = np.mean(np.abs(ypred-ytest))
+    if self.verbose:
+      print(f'RMSE for y is: {rmse:0.5e}')
+      print(f'Mean absoulte error for y is: {mea:0.5e}')
+    # Compare ytest and predictions for each output variable
+    if yplots:
+      plt.title(f'y')
+      plt.plot(ytest,ytest,'-',label='True')
+      if logscale:
+        plt.plot(ytest,ypred,'x',label='GP')
+        plt.xscale('log')
+        plt.yscale('log')
+      else:
+        if errorbars:
+          plt.errorbar(ytest,ypred,fmt='x',yerr=np.sqrt(yvars),\
+              label='GP',capsize=3)
+        else:
+          plt.plot(ytest,ypred,'x',label='GP')
+      plt.ylabel(f'y')
+      plt.xlabel(f'y')
+      plt.legend()
+      plt.show()
+    # Compare ytest and predictions wrt each input variable
+    if xplots:
+      for j in range(self.nx):
+        plt.title(f'y wrt x[{j}]')
+        #xsort = np.sort(xtest[:,j])
+        #asort = np.argsort(xtest[:,j])
+        plt.plot(xtest[:,j],ytest,'.',label='Test')
+        if logscale:
+          plt.plot(xtest[:,j],ypred,'x',label='GP')
+          plt.yscale('log')
+        else:
+          if errorbars:
+            plt.errorbar(xtest[:,j],ypred,fmt='x',yerr=np.sqrt(yvars),\
+                label='GP',capsize=3)
+          else:
+            plt.plot(xtest[:,j],ypred,'x',label='GP')
+        plt.ylabel(f'y')
+        plt.xlabel(f'x[{j}]')
+        plt.legend()
+        plt.show()
+
+  """
+  # Function which plots relative importances (inverse lengthscales)
+  def relative_importances(self,original_data=False,restarts=10,scale='std_dev'):
+    # Check scale arg
+    scales = ['mean','std_dev']
+    if scale not in scales:
+        raise Exception(f"Error: scale must be one of {scales}")
+    # Get means and std deviations for scaling
+    means = np.array([self.priors[i].mean() for i in range(self.nx)])
+    stds = np.array([self.priors[i].std() for i in range(self.nx)])
+    # Choose whether to train GP on original or converted data
+    if original_data:
+      m = self.__fit(self.x,self.y,restarts=restarts)
+    else:
+      m = self.m
+      means = np.array([self.xconrevs[i].con(means[i]) for i in range(self.nx)])
+      stds = np.array([np.std(self.xc[:,i]) for i in range(self.nx)])
+    # Select scale
+    if scale == 'mean':
+        facs = means
+    else:
+        facs = stds
+    # Evaluate importances
+    sens_gp = np.zeros(self.nx)
+    for i in range(self.nx):
+      leng = m.kern.lengthscale[i]
+      if facs[i] == 0:
+          facs[i] = 1
+      sens_gp[i] = facs[i]/leng
+    plt.bar([f'x[{i}]'for i in range(self.nx)],np.log(sens_gp))
+    plt.ylabel('Relative log importance')
+    plt.show()
+
+  def portable_save(self,fname):
+    pg = copy.deepcopy(self)
+    pg.target = None
+    pg.constraints = None
+    save_object(pg,fname)
+
   # Fit GP with inverse optimisation
   def inverse_opt(self,yobs,\
       method='mcmc_mean',return_data=False,iwgp=False,**kwargs):
@@ -465,7 +704,6 @@ class GPMCMC(_surrogate):
   # More flexible private fit method which can use unconverted or train-test datasets
   def __inverse(self,yobs,method,iwgp,**kwargs):
     
-    from andvaranaut.transform import kumaraswamy
     # PyMC context manager
     m = pm.Model()
     with m:
@@ -581,103 +819,4 @@ class GPMCMC(_surrogate):
         self.iwgp_set(mp['iwgp'])
 
     return m, gp, mp, data
-
-  # Assess GP performance with several test plots and RMSE calcs
-  def test_plots(self,revert=True,yplots=True,xplots=True\
-      ,iwgp=False,cwgp=False,method='none'):
-    # Creat train-test sets if none exist
-    if self.train is None:
-      self.train_test()
-    self.xtrain = self.x[self.train,:]
-    self.xtest = self.x[self.test,:]
-    self.ytrain = self.y[self.train,:]
-    self.ytest = self.y[self.test,:]
-
-    # Train model on training set and make predictions on xtest data
-    m, gp, hypers, data = self.__fit(self.xtrain,self.ytrain,method,iwgp,cwgp)
-    if self.verbose:
-      print(hypers)
-    xtest = np.zeros_like(self.xtest)
-    for i in range(self.nx):
-      xtest[:,i] = self.xconrevs[i].con(self.xtest[:,i])
-    ypred, yvars = self.__predict(m,gp,hypers,xtest)
-
-    # Either revert data to original for comparison or leave as is
-    if revert:
-      xtest = self.xtest
-      ytest = self.ytest[:,0]
-      #ypred = self.yconrevs[0].rev(ypred[:,0])
-      ypred, yvars = self.__gh_stats(ypred,yvars,normvar=False)
-      ypred = ypred[:,0]; yvars = yvars[:,0]
-    else: 
-      ytest = self.yconrevs[0].con(self.ytest[:,0])
-
-    # RMSE for each y variable
-    rmse = np.sqrt(np.mean(np.power(ypred-ytest,2)))
-    mea = np.mean(np.abs(ypred-ytest))
-    if self.verbose:
-      print(f'RMSE for y is: {rmse:0.5e}')
-      print(f'Mean absoulte error for y is: {mea:0.5e}')
-    # Compare ytest and predictions for each output variable
-    if yplots:
-      plt.title(f'y')
-      plt.plot(ytest,ytest,'-',label='True')
-      plt.errorbar(ytest,ypred,fmt='x',yerr=np.sqrt(yvars),\
-          label='GP',capsize=3)
-      plt.ylabel(f'y')
-      plt.xlabel(f'y')
-      plt.legend()
-      plt.show()
-    # Compare ytest and predictions wrt each input variable
-    if xplots:
-      for j in range(self.nx):
-        plt.title(f'y wrt x[{j}]')
-        #xsort = np.sort(xtest[:,j])
-        #asort = np.argsort(xtest[:,j])
-        plt.plot(xtest[:,j],ytest,'.',label='Test')
-        plt.errorbar(xtest[:,j],ypred,fmt='x',yerr=np.sqrt(yvars),\
-            label='GP',capsize=3)
-        plt.ylabel(f'y')
-        plt.xlabel(f'x[{j}]')
-        plt.legend()
-        plt.show()
-
-  """
-  # Function which plots relative importances (inverse lengthscales)
-  def relative_importances(self,original_data=False,restarts=10,scale='std_dev'):
-    # Check scale arg
-    scales = ['mean','std_dev']
-    if scale not in scales:
-        raise Exception(f"Error: scale must be one of {scales}")
-    # Get means and std deviations for scaling
-    means = np.array([self.priors[i].mean() for i in range(self.nx)])
-    stds = np.array([self.priors[i].std() for i in range(self.nx)])
-    # Choose whether to train GP on original or converted data
-    if original_data:
-      m = self.__fit(self.x,self.y,restarts=restarts)
-    else:
-      m = self.m
-      means = np.array([self.xconrevs[i].con(means[i]) for i in range(self.nx)])
-      stds = np.array([np.std(self.xc[:,i]) for i in range(self.nx)])
-    # Select scale
-    if scale == 'mean':
-        facs = means
-    else:
-        facs = stds
-    # Evaluate importances
-    sens_gp = np.zeros(self.nx)
-    for i in range(self.nx):
-      leng = m.kern.lengthscale[i]
-      if facs[i] == 0:
-          facs[i] = 1
-      sens_gp[i] = facs[i]/leng
-    plt.bar([f'x[{i}]'for i in range(self.nx)],np.log(sens_gp))
-    plt.ylabel('Relative log importance')
-    plt.show()
-
-  def portable_save(self,fname):
-    pg = copy.deepcopy(self)
-    pg.target = None
-    pg.constraints = None
-    save_object(pg,fname)
   """
