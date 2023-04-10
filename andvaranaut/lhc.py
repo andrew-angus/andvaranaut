@@ -166,7 +166,7 @@ class LHC(_core):
 
 # Inherit from LHC class and add data conversion methods
 class _surrogate(LHC):
-  def __init__(self,xconrevs=None,yconrevs=None,**kwargs,):
+  def __init__(self,xconrevs=None,yconrevs=None,**kwargs):
     # Call LHC init, then validate and set now data conversion/reversion attributes
     super().__init__(**kwargs)
     self.xc = copy.deepcopy(self.x)
