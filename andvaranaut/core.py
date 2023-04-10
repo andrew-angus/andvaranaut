@@ -78,13 +78,13 @@ class _core():
   # Method which takes function, and 2D array of inputs
   # Then runs in parallel for each set of inputs
   # Returning 2D array of outputs
-  def __parallel_runs(self,inps):
+  def __parallel_runs(self,inps,fun):
 
     # Run function in parallel in individual directories    
     if not ray.is_initialized():
       ray.init(num_cpus=self.nproc)
     l = len(inps)
-    all_ids = [_parallel_wrap.remote(self.target,self.rundir,inps[i],i+self.nsamp) for i in range(l)]
+    all_ids = [_parallel_wrap.remote(fun,self.rundir,inps[i],i+self.nsamp) for i in range(l)]
 
     # Get ids as they complete or fail, give warning on fail
     outs = []; fails = np.empty(0,dtype=np.intc)
@@ -120,7 +120,9 @@ class _core():
     return outs, fails
 
   # Private method which takes array of x samples and evaluates y at each
-  def __vector_solver(self,xsamps):
+  def __vector_solver(self,xsamps,fun=None):
+    if fun is None:
+      fun = self.target
     t0 = stopwatch()
     n_samples = len(xsamps)
     # Create directory for tasks
@@ -128,7 +130,7 @@ class _core():
       os.mkdir(self.rundir)
     # Parallel execution using ray
     if self.parallel:
-      ysamps,fails = self.__parallel_runs(xsamps)
+      ysamps,fails = self.__parallel_runs(xsamps,fun)
       assert ysamps.shape[1] == self.ny, "Specified ny does not match function output"
     # Serial execution
     else:
@@ -141,7 +143,7 @@ class _core():
         os.chdir(d)
         # Keep track of fails but run rest of samples
         try:
-          yout = self.target(xsamps[i,:])
+          yout = fun(xsamps[i,:])
         except:
           errstr = f"Warning: Target function evaluation failed at sample {i+1} "+\
               "with x values: " +str(xsamps[i,:])+\
