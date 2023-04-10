@@ -24,17 +24,22 @@ def zero_mean(x):
   ret = np.array([0.0])
   return ret
 
+# Identity conversions
+class _none_conrev:
+  def con(self,x):
+   return x 
+  def rev(self,x):
+   return x 
+
 # Inherit from surrogate class and add GP specific methods
 class GPMCMC(LHC):
   def __init__(self,xconrevs=None,yconrevs=None,\
-      kernel='RBF',noise=True,mean=None,**kwargs):
+      kernel='RBF',noise=True,mean=0,**kwargs):
     # Call LHC init, then validate and set now data conversion/reversion attributes
     super().__init__(**kwargs)
     self.xc = copy.deepcopy(self.x)
     self.yc = copy.deepcopy(self.y)
     self.__conrev_check(xconrevs,yconrevs)
-    if mean is None:
-      mean = 0
     self.change_model(kernel,noise,mean)
     self.__scrub_train_test()
     self.ym = np.empty((0,1))
@@ -201,6 +206,8 @@ class GPMCMC(LHC):
           if isinstance(self.xconrevs[i],wgp):
             rc += self.xconrevs[i].np
         iwgp = pm.LogNormal('iwgp',mu=0.0,sigma=0.25,shape=rc)
+        #iwgp = pm.TruncatedNormal('iwgp',mu=1.0,sigma=1.0,\
+        #    lower=1e-3,upper=5.0,shape=rc)
         rc = 0
         x1 = []
         check = True
@@ -236,8 +243,9 @@ class GPMCMC(LHC):
         if rcpos > 0:
           #cwgpp = pm.TruncatedNormal('cwgp_pos',mu=1.0,sigma=1.0,\
           #    lower=1e-3,upper=10.0,shape=rcpos)
-          cwgpp = pm.TruncatedNormal('cwgp_pos',mu=1.0,sigma=1.0,\
-              lower=1e-15,upper=10.0,shape=rcpos)
+          #cwgpp = pm.TruncatedNormal('cwgp_pos',mu=1.0,sigma=1.0,\
+          #    lower=1e-3,upper=5.0,shape=rcpos)
+          cwgpp = pm.LogNormal('cwgp_pos',mu=0.0,sigma=0.25,shape=rcpos)
         if rc > 0:
           #cwgp = pm.TruncatedNormal('cwgp',mu=0.0,sigma=1.0,\
           #    lower=-10,upper=10,shape=rc)
@@ -297,7 +305,10 @@ class GPMCMC(LHC):
           mp = self.mean_extract(data)
         elif method == 'mcmc_map':
           mp = self.map_extract(data)
-          mp = pm.find_MAP(start=mp)
+          try:
+            mp = pm.find_MAP(start=mp)
+          except:
+            pass
         else:
           raise Exception('method must be one of map, mcmc_map, or mcmc_mean')
 
