@@ -177,31 +177,15 @@ class GPMCMC(LHC):
 
   # Fit GP standard method
   def fit(self,method='map',return_data=False,\
-      iwgp=False,cwgp=False,mean=False,jitter=1e-6,**kwargs):
-    if mean:
-      self.m, self.gp, self.hypers, data = self.__fit(self.x,self.y,\
-          method,iwgp,cwgp,mean,jitter,**kwargs)
-    else:
-      self.m, self.gp, self.hypers, data = self.__fit(self.x,self.y-self.ym,\
-          method,iwgp,cwgp,mean,jitter,**kwargs)
+      iwgp=False,cwgp=False,jitter=1e-6,**kwargs):
+    self.m, self.gp, self.hypers, data = self.__fit(self.x,self.y-self.ym,\
+        method,iwgp,cwgp,jitter,**kwargs)
 
     if return_data:
       return data
 
   # More flexible private fit method which can use unconverted or train-test datasets
-  def __fit(self,x,y,method,iwgp,cwgp,mean=False,jitter=1e-6,**kwargs):
-
-    # Mean pre-processing
-    y0 = y[:,0]
-    y = y[:,0]
-    if mean:
-      ymu = np.mean(y)
-      ys = np.std(y)
-      xmin = np.array([np.min(x[:,i]) for i in range(self.nx)])
-      xmax = np.array([np.max(x[:,i]) for i in range(self.nx)])
-      xdiff = xmax - xmin
-      yc = (y-ymu)/ys
-      xc = (x-xmin)/xdiff
+  def __fit(self,x,y,method,iwgp,cwgp,jitter=1e-6,**kwargs):
     
     # PyMC context manager
     m = pm.Model()
@@ -215,17 +199,6 @@ class GPMCMC(LHC):
       kls = pm.LogNormal('l',mu=0.0,sigma=1.0,shape=self.nx)
       kvar = pm.LogNormal('kv',mu=0.56,sigma=0.75)
 
-      # Mean function linear regression 
-      if mean:
-        # Linear coefficients
-        alp = pm.Normal('alpha',shape=9)
-
-        # Fit to pre-processed data
-        yc = yc - alp[0] - (pt.dot(alp[1:],xc.T).T).reshape(-1,1)
-
-        # Update input array
-        y = y - (yc*ys+ymu)
-
       # Input warping
       if iwgp:
         rc = 0
@@ -234,7 +207,7 @@ class GPMCMC(LHC):
             rc += self.xconrevs[i].np
         iwgp = pm.LogNormal('iwgp',mu=0.0,sigma=0.25,shape=rc)
         #iwgp = pm.TruncatedNormal('iwgp',mu=1.0,sigma=1.0,\
-            #lower=1e-3,upper=5.0,shape=rc)
+        #    lower=1e-3,upper=5.0,shape=rc)
         rc = 0
         x1 = []
         check = True
@@ -269,7 +242,9 @@ class GPMCMC(LHC):
             rc += 1
         if rcpos > 0:
           #cwgpp = pm.TruncatedNormal('cwgp_pos',mu=1.0,sigma=1.0,\
-              #lower=1e-3,upper=5.0,shape=rcpos)
+          #    lower=1e-3,upper=10.0,shape=rcpos)
+          #cwgpp = pm.TruncatedNormal('cwgp_pos',mu=1.0,sigma=1.0,\
+          #    lower=1e-3,upper=5.0,shape=rcpos)
           cwgpp = pm.LogNormal('cwgp_pos',mu=0.0,sigma=0.25,shape=rcpos)
         if rc > 0:
           #cwgp = pm.TruncatedNormal('cwgp',mu=0.0,sigma=1.0,\
@@ -286,12 +261,10 @@ class GPMCMC(LHC):
             rvs.append(cwgp[rc])
             rc += 1
         warper = self.cwgp_set(rvs,mode='pytensor',y=y)
-        yin = warper.conmc(y)
-        yder = warper.dermc(y)
-      elif mean:
-        yin = self.yconrevs[0].conmc(y)
+        yin = warper.conmc(y[:,0])
+        yder = warper.dermc(y[:,0])
       else:
-        yin = self.yconrevs[0].con(y)
+        yin = self.yconrevs[0].con(y[:,0])
 
       # Setup kernel
       if self.kernel == 'RBF':
@@ -304,21 +277,16 @@ class GPMCMC(LHC):
         kern = kvar*pm.gp.cov.Exponential(self.nx,ls=kls)
 
       # GP and likelihood
-      if cwgp or mean:
+      if cwgp:
         K = kern(xin)
         K += pt.identity_like(K)*(jitter+gvar)
         L = pt.slinalg.cholesky(K)
         beta = pt.slinalg.solve_triangular(L,yin,lower=True)
         alpha = pt.slinalg.solve_triangular(L.T,beta)
-        if cwgp:
-          y_ = pm.Potential('ypot',-0.5*pt.dot(yin.T,alpha)\
-              -pt.sum(pt.log(pt.diag(L)))\
-              -0.5*nsamp*pt.log(2*np.pi)\
-              +pt.sum(pt.log(yder)))
-        else:
-          y_ = pm.Potential('ypot',-0.5*pt.dot(yin.T,alpha)\
-              -pt.sum(pt.log(pt.diag(L)))\
-              -0.5*nsamp*pt.log(2*np.pi))
+        y_ = pm.Potential('ypot',-0.5*pt.dot(yin.T,alpha)\
+            -pt.sum(pt.log(pt.diag(L)))\
+            -0.5*nsamp*pt.log(2*np.pi)\
+            +pt.sum(pt.log(yder)))
       else:
         gp = pm.gp.Marginal(cov_func=kern)
         y_ = gp.marginal_likelihood("y", X=xin, y=yin, sigma=pt.sqrt(gvar), \
@@ -346,13 +314,6 @@ class GPMCMC(LHC):
 
     # If method is none do not perform optimisation/sampling
     if method != 'none':
-
-      # Mean function update
-      if mean:
-        ym = self.mean_set(mp['alpha'],ys,ymu,xmin,xdiff,x)
-      else:
-        ym = 0
-      
       # Input warping update
       if iwgp:
         self.iwgp_set(mp['iwgp'])
@@ -370,30 +331,21 @@ class GPMCMC(LHC):
             params.append(mp['cwgp'][rc])
             rc += 1
         self.cwgp_set(np.array(params))
-
-      if iwgp:
-        xin = np.zeros_like(x)
-        for i in range(self.nx):
-          xin[:,i] = self.xconrevs[i].con(x[:,i])
-
-      if cwgp or mean:
-        yin = self.yconrevs[0].con(y0-ym)
-        with m:
-          gp = pm.gp.Marginal(cov_func=kern)
-          y_ = gp.marginal_likelihood("y", X=xin, y=yin, sigma=pt.sqrt(gvar))
-    else:
-      # Mean function update
-      if mean:
-        ym = self.mean_set(self.mp['alpha'],ys,ymu,xmin,xdiff,x)
-      else:
-        ym = 0
-
-      if cwgp or mean:
         if iwgp:
           xin = np.zeros_like(x)
           for i in range(self.nx):
             xin[:,i] = self.xconrevs[i].con(x[:,i])
-        yin = self.yconrevs[0].con(y0-ym)
+        yin = self.yconrevs[0].con(y[:,0])
+        with m:
+          gp = pm.gp.Marginal(cov_func=kern)
+          y_ = gp.marginal_likelihood("y", X=xin, y=yin, sigma=pt.sqrt(gvar))
+    else:
+      if cwgp:
+        if iwgp:
+          xin = np.zeros_like(x)
+          for i in range(self.nx):
+            xin[:,i] = self.xconrevs[i].con(x[:,i])
+        yin = self.yconrevs[0].con(y[:,0])
         with m:
           gp = pm.gp.Marginal(cov_func=kern)
           y_ = gp.marginal_likelihood("y", X=xin, y=yin, sigma=pt.sqrt(gvar))
@@ -430,20 +382,10 @@ class GPMCMC(LHC):
     return mp
 
   # Set output warping parameters
-  def mean_set(self,alp,ys,ymu,xmin,xdiff,x):
-    a0 = alp[0]*ys+ymu-np.dot(alp[1:],xmin/xdiff)*ys
-    a1p = alp[1:]*ys/xdiff
-    def blin_pred(x):
-      return np.array([a0 + np.dot(a1p,x)])
-    self.change_model(mean=blin_pred)
-    ypred = np.array([blin_pred(x[i,:]) for i in range(len(x))])
-    return ypred
-
-  # Set output warping parameters
   def cwgp_set(self,params,mode='numpy',y=None):
     if y is None:
-      y = self.y[:,0]-self.ym[:,0]
-    warper = wgp(self.yconrevs[0].warping_names,params,y,mode=mode) 
+      y = self.y-self.ym
+    warper = wgp(self.yconrevs[0].warping_names,params,y[:,0],mode=mode) 
     if mode == 'numpy':
       self.change_yconrevs([warper])
     else:

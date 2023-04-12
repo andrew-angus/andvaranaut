@@ -433,10 +433,7 @@ class wgp:
       if mode == 'numpy':
         yc = copy.deepcopy(y)
       else:
-        try:
-          yc = as_pt(y)
-        except:
-          yc = y
+        yc = as_pt(y)
     # Fill self.warpings with conrev classes and \
     # self.pid with the starting index in params for each class
     for i in warpings:
@@ -541,20 +538,14 @@ class wgp:
     return res
 
   def conmc(self,y):
-    try:
-      res = as_pt(y)
-    except:
-      res = y
+    res = as_pt(y)
     for i in self.warpings:
       res = i.conmc(res)
     return res
 
   def dermc(self,y):
     res = pt.ones_like(y)
-    try:
-      x = as_pt(y)
-    except:
-      x = y
+    x = as_pt(y)
     for i in self.warpings:
       res *= i.dermc(x)
       x = i.conmc(x)
