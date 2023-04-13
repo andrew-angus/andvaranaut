@@ -486,7 +486,8 @@ class GPMCMC(LHC):
       yv[i,0] = ym2-y[i,0]**2
 
     if normvar:
-      yv /= np.var(self.y)
+      #yv /= np.var(self.y)
+      yv /= np.power(y,2)
 
     return y, yv
 
