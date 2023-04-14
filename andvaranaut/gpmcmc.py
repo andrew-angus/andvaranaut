@@ -591,7 +591,8 @@ class GPMCMC(LHC):
 
   # Assess GP performance with several test plots and RMSE calcs
   def test_plots(self,revert=True,yplots=True,xplots=True,logscale=False\
-      ,iwgp=False,cwgp=False,method='none',errorbars=True):
+      ,iwgp=False,cwgp=False,method='none',errorbars=True,saveyfig=None\
+      ,xlab=None,ylab=None):
     # Creat train-test sets if none exist
     if self.train is None:
       self.train_test()
@@ -641,9 +642,17 @@ class GPMCMC(LHC):
               label='GP',capsize=3)
         else:
           plt.plot(ytest,ypred,'x',label='GP')
-      plt.ylabel(f'y')
-      plt.xlabel(f'y')
+      if xlab is None:
+        plt.xlabel(f'y')
+      else:
+        plt.xlabel(xlab)
+      if ylab is None:
+        plt.ylabel(f'y')
+      else:
+        plt.ylabel(ylab)
       plt.legend()
+      if saveyfig is not None:
+        plt.savefig(saveyfig)
       plt.show()
     # Compare ytest and predictions wrt each input variable
     if xplots:
