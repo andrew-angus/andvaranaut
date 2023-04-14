@@ -625,9 +625,11 @@ class GPMCMC(LHC):
     # RMSE for each y variable
     rmse = np.sqrt(np.mean(np.power(ypred-ytest,2)))
     mea = np.mean(np.abs(ypred-ytest))
+    mpe = np.mean(np.abs(ypred-ytest)/np.abs(ytest))
     if self.verbose:
       print(f'RMSE for y is: {rmse:0.5e}')
       print(f'Mean absoulte error for y is: {mea:0.5e}')
+      print(f'Mean percentage error for y is: {mpe:0.5%}')
     # Compare ytest and predictions for each output variable
     if yplots:
       plt.title(f'y')
