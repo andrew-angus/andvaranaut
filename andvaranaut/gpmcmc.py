@@ -592,7 +592,7 @@ class GPMCMC(LHC):
   # Assess GP performance with several test plots and RMSE calcs
   def test_plots(self,revert=True,yplots=True,xplots=True,logscale=False\
       ,iwgp=False,cwgp=False,method='none',errorbars=True,saveyfig=None\
-      ,xlab=None,ylab=None):
+      ,xlab=None,ylab=None,returndat=False):
     # Creat train-test sets if none exist
     if self.train is None:
       self.train_test()
@@ -676,6 +676,9 @@ class GPMCMC(LHC):
         plt.xlabel(f'x[{j}]')
         plt.legend()
         plt.show()
+
+    if returndat:
+      return xtest,ytest,ypred,yvars
 
   """
   # Function which plots relative importances (inverse lengthscales)
