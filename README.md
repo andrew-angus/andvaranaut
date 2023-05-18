@@ -1,8 +1,8 @@
-# Andvaranaut
+# Andvaranaut  
 
-https://en.wikipedia.org/wiki/Andvaranaut  
+Predictive modelling and uncertainty quantification (UQ) suite. Use requires provision of target function which takes inputs and returns quantity of interest. In addition, probability distributions (from scipy.stats) for input variables should be specified if using sampling, along with optional input/output conversion methods (e.g bounded to unbounded range) for more performant machine learning surrogates.
 
-Predictive modelling and UQ suite. Use requires provision of function which takes inputs and returns quantity of interest. In addition, probability distributions (from scipy.stats) for input variables must be specified, along with optional conversion methods (e.g bounded to unbounded range) for more efficient execution of available ML techniques.
+Name backstory: https://en.wikipedia.org/wiki/Andvaranaut
 
 To install run the following in the same directory as setup.py (can drop the --user flag if root):  
 
@@ -12,23 +12,21 @@ To install run the following in the same directory as setup.py (can drop the --u
 
 ### Current
 
-Latin hypercube sampling  
-UQ forward propagation  
-Parallel target function execution  
-Gaussian process surrogates  
-GP adaptive sampling  
-
-### In Development
-
-Differential evolution MCMC  
-MCMC R convergence analysis  
-Bounded KDE posterior plotting  
+- Latin hypercube sampling  
+- UQ forward propagation  
+- Parallel target function execution   
+- Input \& output transformations   
+- Gaussian process (GP) surrogates   
+- GP adaptive sampling
+- Inverse Bayesian problems via maximum a posteriori (MAP) or Markov chain Monte Carlo (MCMC)
+- GP hyperparameter optimisation via MAP or MCMC
+- Hyperparameter optimisation optionally includes those necessary for complex multi-layered input and output transformations
+- Custom GP mean functions
+- Bayesian optimisation
 
 ### Future
-
-Other MCMC methods  
-Marginal distributions  
-PCE surrogates  
+ 
+- PCE surrogates  
 
 ## Tutorial
 
