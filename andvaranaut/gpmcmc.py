@@ -269,6 +269,9 @@ class GPMCMC(LHC):
       # Setup kernel
       if self.kernel == 'RBF':
         kern = kvar*pm.gp.cov.ExpQuad(self.nx,ls=kls)
+      elif self.kernel == 'RatQuad':
+        alpha = pm.LogNormal('alpha',mu=0.56,sigma=0.75)
+        kern = kvar*pm.gp.cov.RatQuad(self.nx,alpha=alpha,ls=kls)
       elif self.kernel == 'Matern52':
         kern = kvar*pm.gp.cov.Matern52(self.nx,ls=kls)
       elif self.kernel == 'Matern32':
@@ -422,7 +425,7 @@ class GPMCMC(LHC):
 
   # Method to change noise/kernel attributes, scrubs any saved model
   def change_model(self,kernel=None,noise=None,mean=None):
-    kerns = ['RBF','Matern52','Matern32','Exponential']
+    kerns = ['RBF','Matern52','Matern32','Exponential','RatQuad']
     if kernel is None:
       kernel = self.kernel
     if noise is None:
