@@ -32,4 +32,4 @@ PCE surrogates
 
 ## Tutorial
 
-In tutorial/ is a Jupyter notebook called tutorial.ipynb. This will walk through most, if not all, package functionality.
+In tutorial/ is a Jupyter notebook called tutorial.ipynb. This will walk through most basic package functionality.
