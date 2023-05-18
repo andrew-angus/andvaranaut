@@ -26,7 +26,7 @@ setup(
     "GPy",
     "pymc",
     "gpyopt",
-    "numpy",
+    "numpy<=1.23.5",
     "scipy",
     "py-design",
     "ray",
