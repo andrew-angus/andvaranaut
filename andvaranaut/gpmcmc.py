@@ -167,13 +167,15 @@ class GPMCMC(LHC):
   def sample(self,nsamps,seed=None):
     # Evaluate samples
     super().sample(nsamps,seed)
-    self.__con(len(self.x))
 
     # Evaluate mean function
     xm,ym = self._core__vector_solver(self.x,self.mean)
     if len(xm) != len(self.x):
       raise Exception("Mean function not valid at every x point in dataset")
     self.ym = np.r_[self.ym,ym]
+
+    # Get converted data
+    self.__con(len(self.x))
 
   # Fit GP standard method
   def fit(self,method='map',return_data=False,\
@@ -478,7 +480,8 @@ class GPMCMC(LHC):
 
   # Get mean and variance of reverted variable by Gauss-Hermite quadrature
   def __gh_stats(self,x,y,yv,normvar=True,deg=8):
-    # Mean
+
+    # Reversion
     xi,wi = np.polynomial.hermite.hermgauss(deg)
     for i in range(len(y)):
       yi = np.sqrt(2*yv[i,0])*xi+y[i,0]
@@ -488,8 +491,8 @@ class GPMCMC(LHC):
       ym2 = 1/np.sqrt(np.pi)*np.sum(wi*yir2)
       yv[i,0] = ym2-y[i,0]**2
 
+    # Normalise variance output by mean squared
     if normvar:
-      #yv /= np.var(self.y)
       yv /= np.power(y,2)
 
     return y, yv
@@ -564,6 +567,7 @@ class GPMCMC(LHC):
       self.y = np.r_[self.y,yr]
       self.xc = np.r_[self.xc,np.array([xc])]
       self.yc = np.r_[self.yc,np.array([yc])]
+      self.ym = np.r_[self.ym,np.array([ym])]
       self.nsamp = len(self.x)
       return yc
 
