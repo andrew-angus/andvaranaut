@@ -567,7 +567,7 @@ class GPMCMC(LHC):
       self.y = np.r_[self.y,yr]
       self.xc = np.r_[self.xc,np.array([xc])]
       self.yc = np.r_[self.yc,np.array([yc])]
-      self.ym = np.r_[self.ym,np.array([ym])]
+      self.ym = np.r_[self.ym,ym]
       self.nsamp = len(self.x)
       return yc
 
