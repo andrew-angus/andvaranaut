@@ -457,7 +457,7 @@ class GPMCMC(LHC):
     self.hypers = None
 
   # Standard predict method which wraps the GPy predict and allows for parallelism
-  def predict(self,x,return_var=False,convert=True,revert=True,normvar=True):
+  def predict(self,x,return_var=False,convert=True,revert=True,normvar=True,jitter=1e-6):
     if convert:
       xarg = np.zeros_like(x)
       for i in range(self.nx):
@@ -467,7 +467,7 @@ class GPMCMC(LHC):
       for i in range(self.nx):
         x[:,i] = self.xconrevs[i].rev(x[:,i])
     
-    y, yv = self.__predict(self.m,self.gp,self.hypers,xarg)
+    y, yv = self.__predict(self.m,self.gp,self.hypers,xarg,jitter)
 
     if revert:
       # Revert transforms
@@ -498,7 +498,7 @@ class GPMCMC(LHC):
     return y, yv
 
   # Private predict method with more flexibility to act on any provided GPy model
-  def __predict(self,m,gp,hyps,x):
+  def __predict(self,m,gp,hyps,x,jitter=1e-6):
     if self.verbose:
       print('Predicting...')
     t0 = stopwatch()
@@ -524,7 +524,7 @@ class GPMCMC(LHC):
       #ray.shutdown()
     else:
       with m:
-        ypreds, yvarpreds = gp.predict(x, point=hyps,  diag=True)
+        ypreds, yvarpreds = gp.predict(x, point=hyps,  diag=True,jitter=jitter)
     t1 = stopwatch()
     if self.verbose:
       print(f'Time taken: {t1-t0:0.2f} s')
