@@ -18,6 +18,7 @@ import arviz as az
 import pytensor.tensor as pt
 from scipy.optimize import Bounds
 from scipy.stats._continuous_distns import uniform_gen, norm_gen
+import re
 
 # Zero mean function
 def zero_mean(x):
@@ -198,8 +199,8 @@ class GPMCMC(LHC):
         gvar = pm.HalfNormal('gv',sigma=0.4)
       else:
         gvar = 0.0
-      kls = pm.LogNormal('l',mu=0.0,sigma=1.0,shape=self.nx)
-      kvar = pm.LogNormal('kv',mu=0.56,sigma=0.75)
+      kls = pm.LogNormal('l',mu=0.0,sigma=1.0,shape=self.nx*self.nkern)
+      kvar = pm.LogNormal('kv',mu=0.56,sigma=0.75,shape=self.nkern)
 
       # Input warping
       if iwgp:
@@ -268,7 +269,35 @@ class GPMCMC(LHC):
       else:
         yin = self.yconrevs[0].con(y[:,0])
 
-      # Setup kernel
+      # Setup kernel, looping through all specified components
+      for i in range(self.nkern):
+        if self.kerns[i] == 'RBF':
+          kerni = kvar[i]*pm.gp.cov.ExpQuad(self.nx,\
+              ls=kls[i*self.nx:(i+1)*self.nx])
+        elif self.kerns[i] == 'RatQuad':
+          # Only works of only one ratquad kernel specified 
+          alpha = pm.LogNormal('alpha',mu=0.56,sigma=0.75)
+          kerni = kvar[i]*pm.gp.cov.RatQuad(self.nx,alpha=alpha,\
+              ls=kls[i*self.nx:(i+1)*self.nx])
+        elif self.kerns[i] == 'Matern52':
+          kerni = kvar[i]*pm.gp.cov.Matern52(self.nx,\
+              ls=kls[i*self.nx:(i+1)*self.nx])
+        elif self.kerns[i] == 'Matern32':
+          kerni = kvar[i]*pm.gp.cov.Matern32(self.nx,\
+              ls=kls[i*self.nx:(i+1)*self.nx])
+        elif self.kerns[i] == 'Exponential':
+          kerni = kvar[i]*pm.gp.cov.Exponential(self.nx,\
+              ls=kls[i*self.nx:(i+1)*self.nx])
+
+        # Apply kernel operations if more than one kern specified
+        if i == 0:
+          kern = kerni
+        elif self.ops[i-1] == '+':
+          kern += kerni
+        elif self.ops[i-1] == '*':
+          kern *= kerni
+
+      """
       if self.kernel == 'RBF':
         kern = kvar*pm.gp.cov.ExpQuad(self.nx,ls=kls)
       elif self.kernel == 'RatQuad':
@@ -280,6 +309,7 @@ class GPMCMC(LHC):
         kern = kvar*pm.gp.cov.Matern32(self.nx,ls=kls)
       elif self.kernel == 'Exponential':
         kern = kvar*pm.gp.cov.Exponential(self.nx,ls=kls)
+      """
 
       # GP and likelihood
       if cwgp:
@@ -427,30 +457,49 @@ class GPMCMC(LHC):
 
   # Method to change noise/kernel attributes, scrubs any saved model
   def change_model(self,kernel=None,noise=None,mean=None):
-    kerns = ['RBF','Matern52','Matern32','Exponential','RatQuad']
+
+    # Do nothing if argument not given
     if kernel is None:
       kernel = self.kernel
     if noise is None:
       noise = self.noise
     if mean is None:
       changed = False
+    # Zero mean alias
     elif mean == 0:
       self.mean = zero_mean
       xm,ym = self._core__vector_solver(self.x,self.mean)
       if len(xm) != len(self.x):
         raise Exception("Mean function not valid at every x point in dataset")
       self.ym = ym
+    # Assign and evaluate mean function
     else:
       self.mean = mean
       xm,ym = self._core__vector_solver(self.x,self.mean)
       if len(xm) != len(self.x):
         raise Exception("Mean function not valid at every x point in dataset")
       self.ym = ym
-    if kernel not in kerns:
-      raise Exception(f"Error: kernel must be one of {kerns}")
+
+    # Split up kernel string for multi-kernel specs
+    kerns = re.split(r'[+*]',kernel)
+    ops = re.split(r'[ExponentialMatern32Matern52RBF]',kernel)
+    ops[:] = [x for x in ops if x != '']
+
+    # Check specified kernels are valid
+    kernlist = ['RBF','Matern52','Matern32','Exponential','RatQuad']
+    for i in kerns:
+      if i not in kernlist:
+        raise Exception(f"Error: kernel string must contain only {kernlist}")
+
+    # Check validity of noise argument
     if not isinstance(noise,bool):
       raise Exception(f"Error: noise must be of type bool")
+
+    # Assign attributes
     self.kernel = kernel
+    self.kerns = kerns
+    self.ops = ops
+    self.nkern = len(kerns)
     self.noise = noise
     self.m = None
     self.gp = None
