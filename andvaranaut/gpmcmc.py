@@ -180,15 +180,15 @@ class GPMCMC(LHC):
 
   # Fit GP standard method
   def fit(self,method='map',return_data=False,\
-      iwgp=False,cwgp=False,jitter=1e-6,**kwargs):
+      iwgp=False,cwgp=False,jitter=1e-6,truncate=False,**kwargs):
     self.m, self.gp, self.hypers, data = self.__fit(self.x,self.y-self.ym,\
-        method,iwgp,cwgp,jitter,**kwargs)
+        method,iwgp,cwgp,jitter,truncate,**kwargs)
 
     if return_data:
       return data
 
   # More flexible private fit method which can use unconverted or train-test datasets
-  def __fit(self,x,y,method,iwgp,cwgp,jitter=1e-6,**kwargs):
+  def __fit(self,x,y,method,iwgp,cwgp,jitter=1e-6,truncate=False,**kwargs):
     
     # PyMC context manager
     m = pm.Model()
@@ -196,11 +196,21 @@ class GPMCMC(LHC):
     with m:
       # Priors on GP hyperparameters
       if self.noise:
-        gvar = pm.HalfNormal('gv',sigma=0.4)
+        if truncate:
+          gvar = pm.Normal.dist(mu=0.0,sigma=1e-3)
+          gvar = pm.Truncated('gv',gvar,lower=1e-15,upper=1.0)
+        else:
+          gvar = pm.HalfNormal('gv',sigma=1e-3)
       else:
         gvar = 0.0
-      kls = pm.LogNormal('l',mu=0.0,sigma=1.0,shape=self.nx*self.nkern)
-      kvar = pm.LogNormal('kv',mu=0.56,sigma=0.75,shape=self.nkern)
+      if truncate:
+        kls = pm.TruncatedNormal('l',mu=0.5,sigma=0.15,\
+            lower=1e-3,upper=100.0,shape=self.nx*self.nkern)
+        kvar = pm.TruncatedNormal('kv',mu=1.0,sigma=0.15,\
+            lower=1e-1,upper=100.0,shape=self.nkern)
+      else:
+        kls = pm.LogNormal('l',mu=0.0,sigma=1.0,shape=self.nx*self.nkern)
+        kvar = pm.LogNormal('kv',mu=0.56,sigma=0.75,shape=self.nkern)
 
       # Input warping
       if iwgp:
@@ -208,9 +218,11 @@ class GPMCMC(LHC):
         for i in range(self.nx):
           if isinstance(self.xconrevs[i],wgp):
             rc += self.xconrevs[i].np
-        iwgp = pm.LogNormal('iwgp',mu=0.0,sigma=0.25,shape=rc)
-        #iwgp = pm.TruncatedNormal('iwgp',mu=1.0,sigma=1.0,\
-        #    lower=1e-3,upper=5.0,shape=rc)
+        if truncate:
+          iwgp = pm.TruncatedNormal('iwgp',mu=1.0,sigma=1.0,\
+              lower=1e-3,upper=5.0,shape=rc)
+        else:
+          iwgp = pm.LogNormal('iwgp',mu=0.0,sigma=0.25,shape=rc)
         rc = 0
         x1 = []
         check = True
@@ -244,15 +256,17 @@ class GPMCMC(LHC):
           else:
             rc += 1
         if rcpos > 0:
-          #cwgpp = pm.TruncatedNormal('cwgp_pos',mu=1.0,sigma=1.0,\
-          #    lower=1e-3,upper=10.0,shape=rcpos)
-          #cwgpp = pm.TruncatedNormal('cwgp_pos',mu=1.0,sigma=1.0,\
-          #    lower=1e-3,upper=5.0,shape=rcpos)
-          cwgpp = pm.LogNormal('cwgp_pos',mu=0.0,sigma=0.25,shape=rcpos)
+          if truncate:
+            cwgpp = pm.TruncatedNormal('cwgp_pos',mu=1.0,sigma=1.0,\
+                lower=1e-3,upper=5.0,shape=rcpos)
+          else:
+            cwgpp = pm.LogNormal('cwgp_pos',mu=0.0,sigma=0.25,shape=rcpos)
         if rc > 0:
-          #cwgp = pm.TruncatedNormal('cwgp',mu=0.0,sigma=1.0,\
-          #    lower=-10,upper=10,shape=rc)
-          cwgp = pm.Normal('cwgp',mu=0.0,sigma=1.0,shape=rc)
+          if truncate:
+            cwgp = pm.TruncatedNormal('cwgp',mu=0.0,sigma=1.0,\
+                lower=-10,upper=10,shape=rc)
+          else:
+            cwgp = pm.Normal('cwgp',mu=0.0,sigma=1.0,shape=rc)
         rc = 0
         rcpos = 0
         rvs = []
@@ -688,7 +702,6 @@ class GPMCMC(LHC):
       print(f'Mean percentage error for y is: {mpe:0.5%}')
     # Compare ytest and predictions for each output variable
     if yplots:
-      plt.title(f'y')
       plt.plot(ytest,ytest,'-',label='True')
       if logscale:
         plt.plot(ytest,ypred,'x',label='GP')
@@ -710,7 +723,10 @@ class GPMCMC(LHC):
         plt.ylabel(ylab)
       plt.legend()
       if saveyfig is not None:
-        plt.savefig(saveyfig)
+        plt.tight_layout()
+        plt.savefig(saveyfig,bbox_inches='tight')
+      else:
+        plt.title(f'y')
       plt.show()
     # Compare ytest and predictions wrt each input variable
     if xplots:
