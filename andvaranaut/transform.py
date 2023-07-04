@@ -201,6 +201,8 @@ class logarithm:
     return 1/y
   def conmc(self,y):
     return pt.log(y)
+  def revmc(self,y):
+    return pt.exp(y)
   def dermc(self,y):
     return 1/y
 class affine:
@@ -221,6 +223,8 @@ class affine:
     return self.b*np.ones_like(y)
   def conmc(self,y):
     return self.con(y)
+  def revmc(self,y):
+    return self.rev(y)
   def dermc(self,y):
     return self.b*pt.ones_like(y)
 class meanstd(affine):
@@ -304,6 +308,8 @@ class arcsinh:
     return self.b/np.sqrt(np.power(self.d,2)+np.power(y-self.c,2))
   def conmc(self,y):
     return self.a + self.b*pt.arcsinh((y-self.c)/self.d)
+  def revmc(self,y):
+    return self.c + self.d*pt.sinh((y-self.a)/self.b)
   def dermc(self,y):
     return self.b/pt.sqrt(pt.power(self.d,2)+pt.power(y-self.c,2))
 # Box cox with lambad defined such that prior peak at 0 gives (almost) identity transform
@@ -323,6 +329,10 @@ class boxcox:
   def conmc(self,y):
     lambp = self.lamb + 1
     return (pt.sgn(y)*pt.power(pt.abs(y),lambp)-1)/lambp
+  def revmc(self,y):
+    lambp = self.lamb + 1
+    term = y*lambp+1
+    return pt.sgn(term)*pt.power(pt.abs(term),1/lambp)
   def dermc(self,y):
     return pt.power(pt.abs(y),self.lamb)
 # Box cox as above but auto fitted with scikit-learn
@@ -349,6 +359,8 @@ class sinharcsinh:
     return self.b*np.cosh(self.b*np.arcsinh(y)-self.a)/np.sqrt(1+np.power(y,2))
   def conmc(self,y):
     return pt.sinh(self.b*pt.arcsinh(y)-self.a)
+  def revmc(self,y):
+    return pt.sinh((pt.arcsinh(y)+self.a)/self.b)
   def dermc(self,y):
     return self.b*pt.cosh(self.b*pt.arcsinh(y)-self.a)/pt.sqrt(1+pt.power(y,2))
 class sal:
@@ -373,6 +385,8 @@ class sal:
     return self.b*self.d*np.cosh(self.b*np.arcsinh(y)-self.a)/np.sqrt(1+np.power(y,2))
   def conmc(self,y):
     return self.c + self.d*pt.sinh(self.b*pt.arcsinh(y)-self.a)
+  def revmc(self,y):
+    return pt.sinh((pt.arcsinh((y-self.c)/self.d)+self.a)/self.b)
   def dermc(self,y):
     return self.b*self.d*pt.cosh(self.b*pt.arcsinh(y)-self.a)/pt.sqrt(1+pt.power(y,2))
 
@@ -397,6 +411,8 @@ class kumaraswamy:
     return self.a*self.b*np.power(x,self.a-1)*np.power(1-np.power(x,self.a),self.b-1)
   def conmc(self,x):
     return 1 - pt.power(1-pt.power(x,self.a),self.b)
+  def revmc(self,x):
+    return pt.power(1-pt.power(1-x,1/self.b),1/self.a)
   def dermc(self,x):
     return self.a*self.b*pt.power(x,self.a-1)*pt.power(1-pt.power(x,self.a),self.b-1)
 
@@ -433,7 +449,7 @@ class wgp:
       if mode == 'numpy':
         yc = copy.deepcopy(y)
       else:
-        yc = as_pt(y)
+        yc = pt.as_tensor_variable(y)
     # Fill self.warpings with conrev classes and \
     # self.pid with the starting index in params for each class
     for i in warpings:
@@ -538,14 +554,20 @@ class wgp:
     return res
 
   def conmc(self,y):
-    res = as_pt(y)
+    res = pt.as_tensor_variable(y)
     for i in self.warpings:
       res = i.conmc(res)
     return res
 
+  def revmc(self,y):
+    res = pt.as_tensor_variable(y)
+    for i in reversed(self.warpings):
+      res = i.revmc(res)
+    return res
+
   def dermc(self,y):
     res = pt.ones_like(y)
-    x = as_pt(y)
+    x = pt.as_tensor_variable(y)
     for i in self.warpings:
       res *= i.dermc(x)
       x = i.conmc(x)

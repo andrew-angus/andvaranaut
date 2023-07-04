@@ -658,6 +658,192 @@ class GPMCMC(LHC):
 
     return xopt,yopt
 
+  # Perform Bayesian optimisation
+  def BO(self,opt_type='min',opt_method='map',fit_method='map',max_iter=15,\
+      method='eps-RS',eps=0.1,conv=1e-3,iwgp=False,cwgp=False,jitter=1e-6,**kwargs):
+
+    if self.ny > 1:
+      raise Exception('Bayesian minimisation only implemented for single output')
+
+    # Evaluate old optima
+    if opt_type == 'max':
+      xoptf = np.argmax
+      yoptf = np.max
+    elif opt_type == 'min':
+      xoptf = np.argmin
+      yoptf = np.min
+    else:
+      raise Exception('Error: opt_type argument must be one of max or min')
+    xopt = self.x[xoptf(self.y[:,0]),:]
+    yopt = yoptf(self.y)
+
+    if self.verbose:
+      print('Running Bayesian minimisation...')
+      print(f'Current optima is {yopt} at x point {xopt}')
+
+    if self.m is None:
+      raise Exception('Model must be fitted before running Bayesian optimisation')
+
+    mopt = pm.Model()
+    
+    with mopt:
+
+      # Convert distributions from scipy to pymc
+      priors = []
+      for i,j in enumerate(self.priors):
+        if isinstance(j.dist,uniform_gen):
+          if len(j.args) >= 2:
+            prior = pm.Uniform(f'x{i}',lower=j.args[0],\
+                upper=j.args[0]+j.args[1])
+          elif len(j.args) == 1:
+            prior = pm.Uniform(f'x{i}',lower=j.args[0],\
+                upper=j.args[0]+j.kwds['scale'])
+          else:
+            prior = pm.Uniform(f'x{i}',lower=j.kwds['loc'],\
+                upper=j.kwds['loc']+j.kwds['scale'])
+        elif isinstance(j.dist,norm_gen):
+          if len(j.args) >= 2:
+            prior = pm.Normal(f'x{i}',mu=j.args[0],\
+                sigma=j.args[1])
+          elif len(j.args) == 1:
+            prior = pm.Normal(f'x{i}',mu=j.args[0],\
+                sigma=j.kwds['scale'])
+          else:
+            prior = pm.Normal(f'x{i}',mu=j.kwds['loc'],\
+                sigma=j.kwds['scale'])
+        else:
+          raise Exception('Prior distribution conversion from scipy to pymc not implemented')
+        priors.append(prior)
+
+      # Convert x inputs
+      xin = pt.zeros((1,self.nx))
+      for j in range(self.nx):
+        xin = pt.set_subtensor(xin[0,j],\
+            self.xconrevs[j].conmc(priors[j]))
+
+      # Build map to mean and variance predictions
+      K = self.gp.cov_func(self.xc)
+      kstar = self.gp.cov_func(self.xc,xin)
+      if self.noise:
+        K += pt.identity_like(K)*(jitter+self.hypers['gv'])
+      else:
+        K += pt.identity_like(K)*jitter
+      L = pt.slinalg.cholesky(K)
+      beta = pt.slinalg.solve_triangular(L,self.yc,lower=True)
+      alpha = pt.slinalg.solve_triangular(L.T,beta)
+      ycpmean = pt.sum(pt.dot(kstar.T,alpha))
+      kstarstar = self.gp.cov_func(xin,xin)
+      v = pt.slinalg.solve_triangular(L,kstar,lower=True)
+      ycpvar = pt.sum(kstarstar-pt.dot(v.T,v))
+
+      # Revert using Gauss quadrature
+      xi,wi = np.polynomial.hermite.hermgauss(8)
+      yi = pt.sqrt(2*ycpvar)*xi+ycpmean
+      yir = self.yconrevs[0].revmc(yi)+self.mean(xin)
+      yir2 = pt.power(yir,2)
+      ypmean = 1/np.sqrt(np.pi)*pt.sum(wi*yir)
+      ym2 = 1/np.sqrt(np.pi)*pt.sum(wi*yir2)
+      ypvar = ym2-pt.power(ypmean,2)
+
+    # Iterate through optimisation algorithm
+    xsn = 0.0
+    for i in range(max_iter):
+
+      # Choose opt algorithm
+      # Greedy eps random search
+      if method == 'eps-RS':
+
+        # Roll for opt mean or random search
+        roll = np.random.rand()
+        if roll > eps:
+          with mopt:
+            # Maximise or minimise mean prediction
+            if i == 0:
+              if opt_type == 'max':
+                y_ = pm.Potential('pot',ypmean)
+              else:
+                y_ = pm.Potential('pot',-ypmean)
+
+            # Perform optimisation
+            if opt_method == 'map':
+              data = pm.find_MAP(**kwargs)
+              mp = copy.deepcopy(data)
+              print(mp)
+            else:
+              data = pm.sample(**kwargs)
+              if opt_method == 'mcmc_mean':
+                mp = self.mean_extract(data)
+              elif opt_method == 'mcmc_map':
+                mp = self.map_extract(data)
+                try:
+                  mp = pm.find_MAP(start=mp)
+                except:
+                  pass
+              else:
+                raise Exception(\
+                    'opt_method must be one of map, mcmc_map, or mcmc_mean')
+
+          # Extract sample from dictionary
+          xsamp = np.zeros((1,self.nx))
+          for j in range(self.nx):
+            xsamp[0,j] = mp[f'x{j}']
+        else:
+          xsamp = np.array([[j.rvs() for j in self.priors]])
+
+      # Evaluate and update datasets
+      xsamp,ysamp = self._core__vector_solver(xsamp)
+      xm,ym = self._core__vector_solver(xsamp,self.mean)
+      self.x = np.r_[self.x,xsamp]
+      self.y = np.r_[self.y,ysamp]
+      self.xc = np.r_[self.xc,self.__xconrev__(xsamp)]
+      self.yc = np.r_[self.yc,self.__yconrev__(ysamp)]
+      self.ym = np.r_[self.ym,ym]
+      self.nsamp = len(self.x)
+
+      # Evaluate optima
+      self.xopt = self.x[xoptf(self.y[:,0]),:]
+      self.yopt = yoptf(self.y)
+
+      # Fit GP
+      if fit_method == 'map':
+        self.fit(method=fit_method,iwgp=iwgp,cwgp=cwgp,start=self.hypers)
+      else:
+        self.fit(method=fit_method,iwgp=iwgp,cwgp=cwgp)
+
+      # Check for convergence in x sample
+      xsnnew = np.linalg.norm(xsamp)
+      if i > 0 and np.abs(xsn-xsnnew)/np.abs(xsn) < conv:
+        if self.verbose:
+          print('Convergence achieved')
+        break
+      else:
+        xsn = xsnnew
+
+    return xopt,yopt
+
+  # y conversion shortcut
+  def __yconrev__(self,yin,mode='con'):
+    yout = np.zeros_like(yin)
+    if mode == 'con':
+      yout[:,0] = self.yconrevs[0].con(yin[:,0])
+    elif mode == 'rev':
+      yout[:,0] = self.yconrevs[0].rev(yin[:,0])
+    else:
+      raise Exception('Error: Mode must be one of con or rev')
+    return yout
+
+  # x conversion shortcut
+  def __xconrev__(self,xin,mode='con'):
+    xout = np.zeros_like(xin)
+    for i in range(self.nx):
+      if mode == 'con':
+        xout[:,i] = self.xconrevs[i].con(xin[:,i])
+      elif mode == 'rev':
+        xout[:,i] = self.xconrevs[i].rev(xin[:,i])
+      else:
+        raise Exception('Error: Mode must be one of con or rev')
+    return xout
+
 
   # Assess GP performance with several test plots and RMSE calcs
   def test_plots(self,revert=True,yplots=True,xplots=True,logscale=False\
