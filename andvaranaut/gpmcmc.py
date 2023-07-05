@@ -311,20 +311,6 @@ class GPMCMC(LHC):
         elif self.ops[i-1] == '*':
           kern *= kerni
 
-      """
-      if self.kernel == 'RBF':
-        kern = kvar*pm.gp.cov.ExpQuad(self.nx,ls=kls)
-      elif self.kernel == 'RatQuad':
-        alpha = pm.LogNormal('alpha',mu=0.56,sigma=0.75)
-        kern = kvar*pm.gp.cov.RatQuad(self.nx,alpha=alpha,ls=kls)
-      elif self.kernel == 'Matern52':
-        kern = kvar*pm.gp.cov.Matern52(self.nx,ls=kls)
-      elif self.kernel == 'Matern32':
-        kern = kvar*pm.gp.cov.Matern32(self.nx,ls=kls)
-      elif self.kernel == 'Exponential':
-        kern = kvar*pm.gp.cov.Exponential(self.nx,ls=kls)
-      """
-
       # GP and likelihood
       if cwgp:
         K = kern(xin)
@@ -660,7 +646,7 @@ class GPMCMC(LHC):
 
   # Perform Bayesian optimisation
   def BO(self,opt_type='min',opt_method='map',fit_method='map',max_iter=15,\
-      method='eps-RS',eps=0.1,conv=1e-3,iwgp=False,cwgp=False,jitter=1e-6,**kwargs):
+      method='eps-RS',eps=0.1,iwgp=False,cwgp=False,jitter=1e-6,**kwargs):
 
     if self.ny > 1:
       raise Exception('Bayesian minimisation only implemented for single output')
@@ -721,9 +707,36 @@ class GPMCMC(LHC):
         xin = pt.set_subtensor(xin[0,j],\
             self.xconrevs[j].conmc(priors[j]))
 
+      # Establish kernel
+      for i in range(self.nkern):
+        if self.kerns[i] == 'RBF':
+          kerni = self.hypers['kv'][i]*pm.gp.cov.ExpQuad(self.nx,\
+              ls=self.hypers['l'][i*self.nx:(i+1)*self.nx])
+        elif self.kerns[i] == 'RatQuad':
+          # Only works if only one ratquad kernel specified 
+          kerni = self.hypers['kv'][i]*pm.gp.cov.RatQuad(self.nx,alpha=self.hypers['alpha'],\
+              ls=self.hypers['l'][i*self.nx:(i+1)*self.nx])
+        elif self.kerns[i] == 'Matern52':
+          kerni = self.hypers['kv'][i]*pm.gp.cov.Matern52(self.nx,\
+              ls=self.hypers['l'][i*self.nx:(i+1)*self.nx])
+        elif self.kerns[i] == 'Matern32':
+          kerni = self.hypers['kv'][i]*pm.gp.cov.Matern32(self.nx,\
+              ls=self.hypers['l'][i*self.nx:(i+1)*self.nx])
+        elif self.kerns[i] == 'Exponential':
+          kerni = self.hypers['kv'][i]*pm.gp.cov.Exponential(self.nx,\
+              ls=self.hypers['l'][i*self.nx:(i+1)*self.nx])
+
+        # Apply kernel operations if more than one kern specified
+        if i == 0:
+          kern = kerni
+        elif self.ops[i-1] == '+':
+          kern += kerni
+        elif self.ops[i-1] == '*':
+          kern *= kerni
+
       # Build map to mean and variance predictions
-      K = self.gp.cov_func(self.xc)
-      kstar = self.gp.cov_func(self.xc,xin)
+      K = kern(self.xc)
+      kstar = kern(self.xc,xin)
       if self.noise:
         K += pt.identity_like(K)*(jitter+self.hypers['gv'])
       else:
@@ -732,21 +745,20 @@ class GPMCMC(LHC):
       beta = pt.slinalg.solve_triangular(L,self.yc,lower=True)
       alpha = pt.slinalg.solve_triangular(L.T,beta)
       ycpmean = pt.sum(pt.dot(kstar.T,alpha))
-      kstarstar = self.gp.cov_func(xin,xin)
+      kstarstar = kern(xin)
       v = pt.slinalg.solve_triangular(L,kstar,lower=True)
       ycpvar = pt.sum(kstarstar-pt.dot(v.T,v))
 
       # Revert using Gauss quadrature
       xi,wi = np.polynomial.hermite.hermgauss(8)
-      yi = pt.sqrt(2*ycpvar)*xi+ycpmean
+      yi = pt.sqrt(2*ycpvar)*xi+ycpmean*pt.ones_like(xi)
       yir = self.yconrevs[0].revmc(yi)+self.mean(xin)
       yir2 = pt.power(yir,2)
-      ypmean = 1/np.sqrt(np.pi)*pt.sum(wi*yir)
-      ym2 = 1/np.sqrt(np.pi)*pt.sum(wi*yir2)
+      ypmean = 1/np.sqrt(np.pi)*pt.dot(wi,yir)
+      ym2 = 1/np.sqrt(np.pi)*pt.dot(wi,yir2)
       ypvar = ym2-pt.power(ypmean,2)
 
     # Iterate through optimisation algorithm
-    xsn = 0.0
     for i in range(max_iter):
 
       # Choose opt algorithm
@@ -768,7 +780,6 @@ class GPMCMC(LHC):
             if opt_method == 'map':
               data = pm.find_MAP(**kwargs)
               mp = copy.deepcopy(data)
-              print(mp)
             else:
               data = pm.sample(**kwargs)
               if opt_method == 'mcmc_mean':
@@ -790,6 +801,11 @@ class GPMCMC(LHC):
         else:
           xsamp = np.array([[j.rvs() for j in self.priors]])
 
+      # Check prediction at xsamp
+      ypred = self.predict(xsamp)
+      if self.verbose:
+        print(f'Predicted {ypred} at x point {xsamp}')
+
       # Evaluate and update datasets
       xsamp,ysamp = self._core__vector_solver(xsamp)
       xm,ym = self._core__vector_solver(xsamp,self.mean)
@@ -799,6 +815,9 @@ class GPMCMC(LHC):
       self.yc = np.r_[self.yc,self.__yconrev__(ysamp)]
       self.ym = np.r_[self.ym,ym]
       self.nsamp = len(self.x)
+      
+      if self.verbose:
+        print(f'New sample is {ysamp+ym} at x point {xsamp}')
 
       # Evaluate optima
       self.xopt = self.x[xoptf(self.y[:,0]),:]
@@ -809,15 +828,6 @@ class GPMCMC(LHC):
         self.fit(method=fit_method,iwgp=iwgp,cwgp=cwgp,start=self.hypers)
       else:
         self.fit(method=fit_method,iwgp=iwgp,cwgp=cwgp)
-
-      # Check for convergence in x sample
-      xsnnew = np.linalg.norm(xsamp)
-      if i > 0 and np.abs(xsn-xsnnew)/np.abs(xsn) < conv:
-        if self.verbose:
-          print('Convergence achieved')
-        break
-      else:
-        xsn = xsnnew
 
     return xopt,yopt
 

@@ -449,7 +449,7 @@ class wgp:
       if mode == 'numpy':
         yc = copy.deepcopy(y)
       else:
-        yc = pt.as_tensor_variable(y)
+        yc = y
     # Fill self.warpings with conrev classes and \
     # self.pid with the starting index in params for each class
     for i in warpings:
@@ -554,20 +554,20 @@ class wgp:
     return res
 
   def conmc(self,y):
-    res = pt.as_tensor_variable(y)
+    res = y
     for i in self.warpings:
       res = i.conmc(res)
     return res
 
   def revmc(self,y):
-    res = pt.as_tensor_variable(y)
+    res = y
     for i in reversed(self.warpings):
       res = i.revmc(res)
     return res
 
   def dermc(self,y):
     res = pt.ones_like(y)
-    x = pt.as_tensor_variable(y)
+    x = y
     for i in self.warpings:
       res *= i.dermc(x)
       x = i.conmc(x)
