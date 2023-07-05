@@ -670,96 +670,96 @@ class GPMCMC(LHC):
     if self.m is None:
       raise Exception('Model must be fitted before running Bayesian optimisation')
 
-    mopt = pm.Model()
-    
-    with mopt:
-
-      # Convert distributions from scipy to pymc
-      priors = []
-      for i,j in enumerate(self.priors):
-        if isinstance(j.dist,uniform_gen):
-          if len(j.args) >= 2:
-            prior = pm.Uniform(f'x{i}',lower=j.args[0],\
-                upper=j.args[0]+j.args[1])
-          elif len(j.args) == 1:
-            prior = pm.Uniform(f'x{i}',lower=j.args[0],\
-                upper=j.args[0]+j.kwds['scale'])
-          else:
-            prior = pm.Uniform(f'x{i}',lower=j.kwds['loc'],\
-                upper=j.kwds['loc']+j.kwds['scale'])
-        elif isinstance(j.dist,norm_gen):
-          if len(j.args) >= 2:
-            prior = pm.Normal(f'x{i}',mu=j.args[0],\
-                sigma=j.args[1])
-          elif len(j.args) == 1:
-            prior = pm.Normal(f'x{i}',mu=j.args[0],\
-                sigma=j.kwds['scale'])
-          else:
-            prior = pm.Normal(f'x{i}',mu=j.kwds['loc'],\
-                sigma=j.kwds['scale'])
-        else:
-          raise Exception('Prior distribution conversion from scipy to pymc not implemented')
-        priors.append(prior)
-
-      # Convert x inputs
-      xin = pt.zeros((1,self.nx))
-      for j in range(self.nx):
-        xin = pt.set_subtensor(xin[0,j],\
-            self.xconrevs[j].conmc(priors[j]))
-
-      # Establish kernel
-      for i in range(self.nkern):
-        if self.kerns[i] == 'RBF':
-          kerni = self.hypers['kv'][i]*pm.gp.cov.ExpQuad(self.nx,\
-              ls=self.hypers['l'][i*self.nx:(i+1)*self.nx])
-        elif self.kerns[i] == 'RatQuad':
-          # Only works if only one ratquad kernel specified 
-          kerni = self.hypers['kv'][i]*pm.gp.cov.RatQuad(self.nx,alpha=self.hypers['alpha'],\
-              ls=self.hypers['l'][i*self.nx:(i+1)*self.nx])
-        elif self.kerns[i] == 'Matern52':
-          kerni = self.hypers['kv'][i]*pm.gp.cov.Matern52(self.nx,\
-              ls=self.hypers['l'][i*self.nx:(i+1)*self.nx])
-        elif self.kerns[i] == 'Matern32':
-          kerni = self.hypers['kv'][i]*pm.gp.cov.Matern32(self.nx,\
-              ls=self.hypers['l'][i*self.nx:(i+1)*self.nx])
-        elif self.kerns[i] == 'Exponential':
-          kerni = self.hypers['kv'][i]*pm.gp.cov.Exponential(self.nx,\
-              ls=self.hypers['l'][i*self.nx:(i+1)*self.nx])
-
-        # Apply kernel operations if more than one kern specified
-        if i == 0:
-          kern = kerni
-        elif self.ops[i-1] == '+':
-          kern += kerni
-        elif self.ops[i-1] == '*':
-          kern *= kerni
-
-      # Build map to mean and variance predictions
-      K = kern(self.xc)
-      kstar = kern(self.xc,xin)
-      if self.noise:
-        K += pt.identity_like(K)*(jitter+self.hypers['gv'])
-      else:
-        K += pt.identity_like(K)*jitter
-      L = pt.slinalg.cholesky(K)
-      beta = pt.slinalg.solve_triangular(L,self.yc,lower=True)
-      alpha = pt.slinalg.solve_triangular(L.T,beta)
-      ycpmean = pt.sum(pt.dot(kstar.T,alpha))
-      kstarstar = kern(xin)
-      v = pt.slinalg.solve_triangular(L,kstar,lower=True)
-      ycpvar = pt.sum(kstarstar-pt.dot(v.T,v))
-
-      # Revert using Gauss quadrature
-      xi,wi = np.polynomial.hermite.hermgauss(8)
-      yi = pt.sqrt(2*ycpvar)*xi+ycpmean*pt.ones_like(xi)
-      yir = self.yconrevs[0].revmc(yi)+self.mean(xin)
-      yir2 = pt.power(yir,2)
-      ypmean = 1/np.sqrt(np.pi)*pt.dot(wi,yir)
-      ym2 = 1/np.sqrt(np.pi)*pt.dot(wi,yir2)
-      ypvar = ym2-pt.power(ypmean,2)
-
     # Iterate through optimisation algorithm
     for i in range(max_iter):
+
+      # New mopt instance each iteration
+      mopt = pm.Model()
+      with mopt:
+
+        # Convert distributions from scipy to pymc
+        priors = []
+        for i,j in enumerate(self.priors):
+          if isinstance(j.dist,uniform_gen):
+            if len(j.args) >= 2:
+              prior = pm.Uniform(f'x{i}',lower=j.args[0],\
+                  upper=j.args[0]+j.args[1])
+            elif len(j.args) == 1:
+              prior = pm.Uniform(f'x{i}',lower=j.args[0],\
+                  upper=j.args[0]+j.kwds['scale'])
+            else:
+              prior = pm.Uniform(f'x{i}',lower=j.kwds['loc'],\
+                  upper=j.kwds['loc']+j.kwds['scale'])
+          elif isinstance(j.dist,norm_gen):
+            if len(j.args) >= 2:
+              prior = pm.Normal(f'x{i}',mu=j.args[0],\
+                  sigma=j.args[1])
+            elif len(j.args) == 1:
+              prior = pm.Normal(f'x{i}',mu=j.args[0],\
+                  sigma=j.kwds['scale'])
+            else:
+              prior = pm.Normal(f'x{i}',mu=j.kwds['loc'],\
+                  sigma=j.kwds['scale'])
+          else:
+            raise Exception('Prior distribution conversion from scipy to pymc not implemented')
+          priors.append(prior)
+
+        # Convert x inputs
+        xin = pt.zeros((1,self.nx))
+        for j in range(self.nx):
+          xin = pt.set_subtensor(xin[0,j],\
+              self.xconrevs[j].conmc(priors[j]))
+
+        # Establish kernel
+        for j in range(self.nkern):
+          if self.kerns[j] == 'RBF':
+            kerni = self.hypers['kv'][j]*pm.gp.cov.ExpQuad(self.nx,\
+                ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
+          elif self.kerns[j] == 'RatQuad':
+            # Only works if only one ratquad kernel specified 
+            kerni = self.hypers['kv'][j]*pm.gp.cov.RatQuad(self.nx,alpha=self.hypers['alpha'],\
+                ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
+          elif self.kerns[j] == 'Matern52':
+            kerni = self.hypers['kv'][j]*pm.gp.cov.Matern52(self.nx,\
+                ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
+          elif self.kerns[j] == 'Matern32':
+            kerni = self.hypers['kv'][j]*pm.gp.cov.Matern32(self.nx,\
+                ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
+          elif self.kerns[j] == 'Exponential':
+            kerni = self.hypers['kv'][j]*pm.gp.cov.Exponential(self.nx,\
+                ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
+
+          # Apply kernel operations if more than one kern specified
+          if j == 0:
+            kern = kerni
+          elif self.ops[j-1] == '+':
+            kern += kerni
+          elif self.ops[j-1] == '*':
+            kern *= kerni
+
+        # Build map to mean and variance predictions
+        K = kern(self.xc)
+        kstar = kern(self.xc,xin)
+        if self.noise:
+          K += pt.identity_like(K)*(jitter+self.hypers['gv'])
+        else:
+          K += pt.identity_like(K)*jitter
+        L = pt.slinalg.cholesky(K)
+        beta = pt.slinalg.solve_triangular(L,self.yc,lower=True)
+        alpha = pt.slinalg.solve_triangular(L.T,beta)
+        ycpmean = pt.sum(pt.dot(kstar.T,alpha))
+        kstarstar = kern(xin)
+        v = pt.slinalg.solve_triangular(L,kstar,lower=True)
+        ycpvar = pt.sum(kstarstar-pt.dot(v.T,v))
+
+        # Revert using Gauss quadrature
+        xi,wi = np.polynomial.hermite.hermgauss(8)
+        yi = pt.sqrt(2*ycpvar)*xi+ycpmean*pt.ones_like(xi)
+        yir = self.yconrevs[0].revmc(yi)+self.mean(xin)
+        yir2 = pt.power(yir,2)
+        ypmean = 1/np.sqrt(np.pi)*pt.dot(wi,yir)
+        ym2 = 1/np.sqrt(np.pi)*pt.dot(wi,yir2)
+        ypvar = ym2-pt.power(ypmean,2)
 
       # Choose opt algorithm
       # Greedy eps random search
@@ -770,16 +770,18 @@ class GPMCMC(LHC):
         if roll > eps:
           with mopt:
             # Maximise or minimise mean prediction
-            if i == 0:
-              if opt_type == 'max':
-                y_ = pm.Potential('pot',ypmean)
-              else:
-                y_ = pm.Potential('pot',-ypmean)
+            if opt_type == 'max':
+              y_ = pm.Potential('pot',ypmean)
+            else:
+              y_ = pm.Potential('pot',-ypmean)
 
             # Perform optimisation
             if opt_method == 'map':
-              data = pm.find_MAP(**kwargs)
+              start = {str(ky):np.random.normal() for ky in mopt.cont_vars}
+              data = pm.find_MAP(start=start,**kwargs)
               mp = copy.deepcopy(data)
+              mpcheck = {str(ky):mp[str(ky)] for ky in mopt.cont_vars}
+              print(mopt.point_logps(point=mpcheck))
             else:
               data = pm.sample(**kwargs)
               if opt_method == 'mcmc_mean':
