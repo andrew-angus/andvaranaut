@@ -180,15 +180,17 @@ class GPMCMC(LHC):
 
   # Fit GP standard method
   def fit(self,method='map',return_data=False,\
-      iwgp=False,cwgp=False,jitter=1e-6,truncate=False,**kwargs):
+      iwgp=False,cwgp=False,jitter=1e-6,truncate=False,\
+      restarts=1,**kwargs):
     self.m, self.gp, self.hypers, data = self.__fit(self.x,self.y-self.ym,\
-        method,iwgp,cwgp,jitter,truncate,**kwargs)
+        method,iwgp,cwgp,jitter,truncate,restarts,**kwargs)
 
     if return_data:
       return data
 
   # More flexible private fit method which can use unconverted or train-test datasets
-  def __fit(self,x,y,method,iwgp,cwgp,jitter=1e-6,truncate=False,**kwargs):
+  def __fit(self,x,y,method,iwgp,cwgp,jitter=1e-6,truncate=False,restarts=1,\
+      **kwargs):
     
     # PyMC context manager
     m = pm.Model()
@@ -318,19 +320,37 @@ class GPMCMC(LHC):
         L = pt.slinalg.cholesky(K)
         beta = pt.slinalg.solve_triangular(L,yin,lower=True)
         alpha = pt.slinalg.solve_triangular(L.T,beta)
-        y_ = pm.Potential('ypot',-0.5*pt.dot(yin.T,alpha)\
+        y_ = pm.Potential('yopt',-0.5*pt.dot(yin.T,alpha)\
             -pt.sum(pt.log(pt.diag(L)))\
             -0.5*nsamp*pt.log(2*np.pi)\
             +pt.sum(pt.log(yder)))
       else:
         gp = pm.gp.Marginal(cov_func=kern)
-        y_ = gp.marginal_likelihood("y", X=xin, y=yin, sigma=pt.sqrt(gvar), \
+        y_ = gp.marginal_likelihood("yopt", X=xin, y=yin, sigma=pt.sqrt(gvar), \
             jitter=jitter)
 
       # Fit and process results depending on method
       if method == 'map':
-        data = pm.find_MAP(**kwargs)
-        mp = copy.deepcopy(data)
+        maxl = np.finfo(np.float64).min
+        for i in range(restarts):
+          start = {str(ky):np.random.normal() for ky in m.cont_vars}
+          try:
+            data = pm.find_MAP(**kwargs)
+            mp = copy.deepcopy(data)
+            mpcheck = {str(ky):mp[str(ky)] for ky in m.cont_vars}
+            logps = m.point_logps(point=mpcheck)
+            logsum = np.sum(np.array([logps[str(ky)] for ky in logps.keys()]))
+            #print(start)
+            #print(logps)
+            #print(logsum)
+            #print('')
+          except:
+            print('Restart failed')
+            logsum = maxl
+          if logsum > maxl:
+            mpmax = mp
+            maxl = logsum
+        mp = mpmax
       elif method == 'none':
         data = None
         mp = self.hypers
@@ -777,9 +797,6 @@ class GPMCMC(LHC):
           else:
             ydiff = pt.maximum(pt.zeros_like(xi),yioptr-yir)
           EI = 1/np.sqrt(np.pi)*pt.dot(wi,ydiff)
-
-
-
 
       # Choose opt algorithm
       # Greedy eps random search
