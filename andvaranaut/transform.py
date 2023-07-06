@@ -449,7 +449,7 @@ class wgp:
       if mode == 'numpy':
         yc = copy.deepcopy(y)
       else:
-        yc = y
+        yc = pt.as_tensor_variable(y)
     # Fill self.warpings with conrev classes and \
     # self.pid with the starting index in params for each class
     for i in warpings:

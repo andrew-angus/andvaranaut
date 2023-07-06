@@ -646,7 +646,8 @@ class GPMCMC(LHC):
 
   # Perform Bayesian optimisation
   def BO(self,opt_type='min',opt_method='map',fit_method='map',max_iter=15,\
-      method='eps-RS',eps=0.1,iwgp=False,cwgp=False,jitter=1e-6,**kwargs):
+      method='eps-RS',eps=0.1,iwgp=False,cwgp=False,jitter=1e-6,conv=1e-3,**kwargs):
+
 
     if self.ny > 1:
       raise Exception('Bayesian minimisation only implemented for single output')
@@ -660,18 +661,22 @@ class GPMCMC(LHC):
       yoptf = np.min
     else:
       raise Exception('Error: opt_type argument must be one of max or min')
-    xopt = self.x[xoptf(self.y[:,0]),:]
-    yopt = yoptf(self.y)
+    self.xopt = self.x[xoptf(self.y[:,0]),:]
+    self.yopt = yoptf(self.y)
 
     if self.verbose:
       print('Running Bayesian minimisation...')
-      print(f'Current optima is {yopt} at x point {xopt}')
+      print(f'Current optima is {self.yopt} at x point {self.xopt}')
 
     if self.m is None:
       raise Exception('Model must be fitted before running Bayesian optimisation')
 
     # Iterate through optimisation algorithm
+    xsampold = np.array([[1e300 for i in range(self.nx)]])
     for i in range(max_iter):
+
+      if self.verbose:
+        print(f'Iteration {i}')
 
       # New mopt instance each iteration
       mopt = pm.Model()
@@ -679,26 +684,26 @@ class GPMCMC(LHC):
 
         # Convert distributions from scipy to pymc
         priors = []
-        for i,j in enumerate(self.priors):
+        for k,j in enumerate(self.priors):
           if isinstance(j.dist,uniform_gen):
             if len(j.args) >= 2:
-              prior = pm.Uniform(f'x{i}',lower=j.args[0],\
+              prior = pm.Uniform(f'x{k}',lower=j.args[0],\
                   upper=j.args[0]+j.args[1])
             elif len(j.args) == 1:
-              prior = pm.Uniform(f'x{i}',lower=j.args[0],\
+              prior = pm.Uniform(f'x{k}',lower=j.args[0],\
                   upper=j.args[0]+j.kwds['scale'])
             else:
-              prior = pm.Uniform(f'x{i}',lower=j.kwds['loc'],\
+              prior = pm.Uniform(f'x{k}',lower=j.kwds['loc'],\
                   upper=j.kwds['loc']+j.kwds['scale'])
           elif isinstance(j.dist,norm_gen):
             if len(j.args) >= 2:
-              prior = pm.Normal(f'x{i}',mu=j.args[0],\
+              prior = pm.Normal(f'x{k}',mu=j.args[0],\
                   sigma=j.args[1])
             elif len(j.args) == 1:
-              prior = pm.Normal(f'x{i}',mu=j.args[0],\
+              prior = pm.Normal(f'x{k}',mu=j.args[0],\
                   sigma=j.kwds['scale'])
             else:
-              prior = pm.Normal(f'x{i}',mu=j.kwds['loc'],\
+              prior = pm.Normal(f'x{k}',mu=j.kwds['loc'],\
                   sigma=j.kwds['scale'])
           else:
             raise Exception('Prior distribution conversion from scipy to pymc not implemented')
@@ -756,10 +761,25 @@ class GPMCMC(LHC):
         xi,wi = np.polynomial.hermite.hermgauss(8)
         yi = pt.sqrt(2*ycpvar)*xi+ycpmean*pt.ones_like(xi)
         yir = self.yconrevs[0].revmc(yi)+self.mean(xin)
-        yir2 = pt.power(yir,2)
         ypmean = 1/np.sqrt(np.pi)*pt.dot(wi,yir)
-        ym2 = 1/np.sqrt(np.pi)*pt.dot(wi,yir2)
-        ypvar = ym2-pt.power(ypmean,2)
+        #yir2 = pt.power(yir,2)
+        #ym2 = 1/np.sqrt(np.pi)*pt.dot(wi,yir2)
+        #ypvar = ym2-pt.power(ypmean,2)
+
+        # Expected improvement specific methods
+        if method == 'EI':
+          ycoptm, ycoptv = \
+              self.__predict(self.m,self.gp,self.hypers,np.array([self.xopt]))
+          yiopt = np.sqrt(2*ycoptv[:,0])*xi+ycoptm[:,0]
+          yioptr = self.yconrevs[0].rev(yiopt)+self.mean(self.xopt)
+          if opt_type == 'max':
+            ydiff = pt.maximum(pt.zeros_like(xi),yir-yioptr)
+          else:
+            ydiff = pt.maximum(pt.zeros_like(xi),yioptr-yir)
+          EI = 1/np.sqrt(np.pi)*pt.dot(wi,ydiff)
+
+
+
 
       # Choose opt algorithm
       # Greedy eps random search
@@ -802,6 +822,50 @@ class GPMCMC(LHC):
             xsamp[0,j] = mp[f'x{j}']
         else:
           xsamp = np.array([[j.rvs() for j in self.priors]])
+      elif method == 'EI':
+        with mopt:
+          # Maximise or minimise mean prediction
+          y_ = pm.Potential('pot',EI)
+
+          # Perform optimisation
+          if opt_method == 'map':
+            start = {str(ky):np.random.normal() for ky in mopt.cont_vars}
+            data = pm.find_MAP(start=start,**kwargs)
+            mp = copy.deepcopy(data)
+            mpcheck = {str(ky):mp[str(ky)] for ky in mopt.cont_vars}
+            print(mopt.point_logps(point=mpcheck))
+          else:
+            data = pm.sample(**kwargs)
+            if opt_method == 'mcmc_mean':
+              mp = self.mean_extract(data)
+            elif opt_method == 'mcmc_map':
+              mp = self.map_extract(data)
+              try:
+                mp = pm.find_MAP(start=mp)
+              except:
+                pass
+            else:
+              raise Exception(\
+                  'opt_method must be one of map, mcmc_map, or mcmc_mean')
+        # Extract sample from dictionary
+        xsamp = np.zeros((1,self.nx))
+        for j in range(self.nx):
+          xsamp[0,j] = mp[f'x{j}']
+      else:
+        raise Exception('Error: method must be one of eps-RS or EI')
+
+      # Evaluate convergence
+      xdiff = np.sum(np.abs(xsamp-xsampold)/np.abs(xsampold))/self.nx
+      if xdiff < conv:
+        if self.verbose:
+          print(\
+              f'Convergence at relative tolerance {conv} achieved with point {xsamp}')
+        break
+      else:
+        if self.verbose and i > 0:
+          print(\
+              f'Relative convergence in sample: {xdiff}')
+        xsampold = xsamp
 
       # Check prediction at xsamp
       ypred = self.predict(xsamp)
@@ -827,11 +891,14 @@ class GPMCMC(LHC):
 
       # Fit GP
       if fit_method == 'map':
-        self.fit(method=fit_method,iwgp=iwgp,cwgp=cwgp,start=self.hypers)
+        try:
+          self.fit(method=fit_method,iwgp=iwgp,cwgp=cwgp,start=self.hypers)
+        except:
+          self.fit(method=fit_method,iwgp=iwgp,cwgp=cwgp)
       else:
         self.fit(method=fit_method,iwgp=iwgp,cwgp=cwgp)
 
-    return xopt,yopt
+    return self.xopt,self.yopt
 
   # y conversion shortcut
   def __yconrev__(self,yin,mode='con'):
