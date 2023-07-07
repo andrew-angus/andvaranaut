@@ -20,10 +20,6 @@ from scipy.optimize import Bounds
 from scipy.stats._continuous_distns import uniform_gen, norm_gen
 import re
 
-# Zero mean function
-def zero_mean(x):
-  ret = np.array([0.0])
-  return ret
 
 # Identity conversions
 class _none_conrev:
@@ -43,7 +39,11 @@ class GPMCMC(LHC):
     self.__conrev_check(xconrevs,yconrevs)
     self.change_model(kernel,noise,mean)
     self.__scrub_train_test()
-    self.ym = np.empty((0,1))
+    self.ym = copy.deepcopy(self.y)
+
+  # Zero mean function
+  def zero_mean(self,x):
+    return np.zeros(self.ny)
 
   # Conversion of last n samples
   def __con(self,nsamps):
@@ -165,9 +165,9 @@ class GPMCMC(LHC):
     self.test = None
 
   # Sample method inherits lhc sampling and adds adaptive sampling option
-  def sample(self,nsamps,seed=None):
+  def sample(self,nsamps,seed=None,improved=False):
     # Evaluate samples
-    super().sample(nsamps,seed)
+    super().sample(nsamps=nsamps,seed=seed,improved=improved)
 
     # Evaluate mean function
     xm,ym = self._core__vector_solver(self.x,self.mean)
@@ -487,7 +487,7 @@ class GPMCMC(LHC):
       changed = False
     # Zero mean alias
     elif mean == 0:
-      self.mean = zero_mean
+      self.mean = self.zero_mean
       xm,ym = self._core__vector_solver(self.x,self.mean)
       if len(xm) != len(self.x):
         raise Exception("Mean function not valid at every x point in dataset")

@@ -22,7 +22,7 @@ class LHC(_core):
     self.y = np.empty((0,self.ny))
 
   # Add n samples to current via latin hypercube sampling
-  def sample(self,nsamps,seed=None,improved=True):
+  def sample(self,nsamps,seed=None,improved=False):
     if not isinstance(nsamps,int) or (nsamps < 1):
       raise Exception("Error: nsamps argument must be an integer > 0") 
     if self.verbose:
@@ -38,7 +38,7 @@ class LHC(_core):
     self.nsamp = len(self.x)
 
   # Produce latin hypercube samples from input distributions
-  def __latin_sample(self,nsamps,seed=None,improved=True):
+  def __latin_sample(self,nsamps,seed=None,improved=False):
     if improved:
       if seed:
         np.random.seed(seed)
