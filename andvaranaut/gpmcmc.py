@@ -571,29 +571,8 @@ class GPMCMC(LHC):
     if self.verbose:
       print('Predicting...')
     t0 = stopwatch()
-    if self.parallel:
-      # Break x values into maximal sized chunks and use ray parallelism
-      if not ray.is_initialized():
-        ray.init(num_cpus=self.nproc,log_to_driver=False)
-      chunks = np.minimum(len(x),self.nproc)
-      crem = len(x) % chunks
-      csize = round((len(x)-crem)/chunks)
-      csizes = np.ones(chunks,dtype=np.intc)*csize
-      csizes[:crem] += 1
-      cinds = np.array([np.sum(csizes[:i+1]) for i in range(chunks)])
-      cinds = np.r_[0,cinds]
-      gpred = lambda x: gp.predict(x, point=hyps,  diag=True)
-      outs = ray.get([_parallel_predict.remote(\
-          x[cinds[i]:cinds[i+1]].reshape((csizes[i],self.nx)),\
-          gpred) for i in range(chunks)]) # Chunks
-      ypreds = np.empty((0,self.ny)); yvarpreds = np.empty((0,outs[0][1].shape[1]))
-      for i in range(chunks):
-        ypreds = np.r_[ypreds,outs[i][0]]
-        yvarpreds = np.r_[yvarpreds,outs[i][1]]
-      #ray.shutdown()
-    else:
-      with m:
-        ypreds, yvarpreds = gp.predict(x, point=hyps,  diag=True,jitter=jitter)
+    with m:
+      ypreds, yvarpreds = gp.predict(x, point=hyps,  diag=True,jitter=jitter)
     t1 = stopwatch()
     if self.verbose:
       print(f'Time taken: {t1-t0:0.2f} s')
@@ -665,8 +644,8 @@ class GPMCMC(LHC):
     return xopt,yopt
 
   # Perform Bayesian optimisation
-  def BO(self,opt_type='min',opt_method='map',fit_method='map',max_iter=15,\
-      method='eps-RS',eps=0.1,iwgp=False,cwgp=False,jitter=1e-6,conv=1e-3,**kwargs):
+  def BO(self,opt_type='min',opt_method='map',fit_method='map',max_iter=16,\
+      method='eps-RS',eps=0.1,iwgp=False,cwgp=False,jitter=1e-6,conv=0.1,**kwargs):
 
 
     if self.ny > 1:
@@ -876,7 +855,7 @@ class GPMCMC(LHC):
       if xdiff < conv:
         if self.verbose:
           print(\
-              f'Convergence at relative tolerance {conv} achieved with point {xsamp}')
+              f'Convergence at relative tolerance {xdiff} achieved with point {xsamp}')
         break
       else:
         if self.verbose and i > 0:
@@ -1034,169 +1013,170 @@ class GPMCMC(LHC):
     if returndat:
       return xtest,ytest,ypred,yvars
 
-  """
   # Function which plots relative importances (inverse lengthscales)
-  def relative_importances(self,original_data=False,restarts=10,scale='std_dev'):
-    # Check scale arg
-    scales = ['mean','std_dev']
-    if scale not in scales:
-        raise Exception(f"Error: scale must be one of {scales}")
-    # Get means and std deviations for scaling
-    means = np.array([self.priors[i].mean() for i in range(self.nx)])
-    stds = np.array([self.priors[i].std() for i in range(self.nx)])
-    # Choose whether to train GP on original or converted data
-    if original_data:
-      m = self.__fit(self.x,self.y,restarts=restarts)
+  def relative_importances(self,logscale=False):
+
+    if logscale:
+      plt.bar([f'x[{i}]'for i in range(self.nx)],np.log(1/self.hypers['l']))
     else:
-      m = self.m
-      means = np.array([self.xconrevs[i].con(means[i]) for i in range(self.nx)])
-      stds = np.array([np.std(self.xc[:,i]) for i in range(self.nx)])
-    # Select scale
-    if scale == 'mean':
-        facs = means
-    else:
-        facs = stds
-    # Evaluate importances
-    sens_gp = np.zeros(self.nx)
-    for i in range(self.nx):
-      leng = m.kern.lengthscale[i]
-      if facs[i] == 0:
-          facs[i] = 1
-      sens_gp[i] = facs[i]/leng
-    plt.bar([f'x[{i}]'for i in range(self.nx)],np.log(sens_gp))
+      plt.bar([f'x[{i}]'for i in range(self.nx)],1/self.hypers['l'])
     plt.ylabel('Relative log importance')
     plt.show()
 
-  def portable_save(self,fname):
-    pg = copy.deepcopy(self)
-    pg.target = None
-    pg.constraints = None
-    save_object(pg,fname)
-
   # Fit GP with inverse optimisation
   def inverse_opt(self,yobs,\
-      method='mcmc_mean',return_data=False,iwgp=False,**kwargs):
-    self.m, self.gp, self.hypers, data = self.__inverse(yobs,method,\
-        iwgp,**kwargs)
-    if return_data:
-      return data
+      method='map',evaluate_opt=False,jitter=1e-6,**kwargs):
 
-  # More flexible private fit method which can use unconverted or train-test datasets
-  def __inverse(self,yobs,method,iwgp,**kwargs):
-    
-    # PyMC context manager
-    m = pm.Model()
-    with m:
-      # Priors on GP hyperparameters
-      if self.noise:
-        gvar = pm.HalfNormal('gv',sigma=0.4)
-      else:
-        gvar = 1e-8
-      kls = pm.Gamma('l',alpha=2.15,beta=6.91,shape=self.nx)
-      kvar = pm.Gamma('kv',alpha=4.3,beta=5.3)
+    if self.m is None:
+      raise Exception('Model must be fitted before running Bayesian optimisation')
 
-      # Add y observations to existing dataset
-      obs = len(yobs)
-      yobc = self.yconrevs[0].con(yobs)
-      yin = np.vstack([self.yc,yobc]).flatten()
+    if self.verbose:
+      print('Running Bayesian inverse solver...')
+
+    # Optimisation model
+    mopt = pm.Model()
+    with mopt:
 
       # Convert distributions from scipy to pymc
       priors = []
-      for i,j in enumerate(self.priors):
+      for k,j in enumerate(self.priors):
         if isinstance(j.dist,uniform_gen):
           if len(j.args) >= 2:
-            prior = pm.Uniform(f'x{i}',lower=j.args[0],\
+            prior = pm.Uniform(f'x{k}',lower=j.args[0],\
                 upper=j.args[0]+j.args[1])
           elif len(j.args) == 1:
-            prior = pm.Uniform(f'x{i}',lower=j.args[0],\
+            prior = pm.Uniform(f'x{k}',lower=j.args[0],\
                 upper=j.args[0]+j.kwds['scale'])
           else:
-            prior = pm.Uniform(f'x{i}',lower=j.kwds['loc'],\
+            prior = pm.Uniform(f'x{k}',lower=j.kwds['loc'],\
                 upper=j.kwds['loc']+j.kwds['scale'])
         elif isinstance(j.dist,norm_gen):
           if len(j.args) >= 2:
-            prior = pm.Normal(f'x{i}',mu=j.args[0],\
+            prior = pm.Normal(f'x{k}',mu=j.args[0],\
                 sigma=j.args[1])
           elif len(j.args) == 1:
-            prior = pm.Normal(f'x{i}',mu=j.args[0],\
+            prior = pm.Normal(f'x{k}',mu=j.args[0],\
                 sigma=j.kwds['scale'])
           else:
-            prior = pm.Normal(f'x{i}',mu=j.kwds['loc'],\
+            prior = pm.Normal(f'x{k}',mu=j.kwds['loc'],\
                 sigma=j.kwds['scale'])
         else:
           raise Exception('Prior distribution conversion from scipy to pymc not implemented')
         priors.append(prior)
 
-      # Input warping
-      xin = pt.zeros((self.nsamp+obs,self.nx))
-      if iwgp:
-        rc = 0
-        for i in range(self.nx):
-          if isinstance(self.xconrevs[i],wgp):
-            rc += self.xconrevs[i].np
-        iwgp = pm.Gamma('iwgp',alpha=4.3,beta=5.3,shape=rc)
-        rc = 0
-        check = True
-        for i in range(self.nx):
-          if isinstance(self.xconrevs[i],wgp):
-            check = False
-            rvs = [iwgp[k] for k in range(rc,rc+self.xconrevs[i].np)]
-            xin = pt.set_subtensor(xin[:self.nsamp,i],\
-                self.xconrevs[i].conmc(self.x[:,i],rvs))
-            xin = pt.set_subtensor(xin[self.nsamp:,i],\
-                self.xconrevs[i].conmc(priors[i],rvs))
-            rc += self.xconrevs[i].np
-          else:
-            xin = pt.set_subtensor(xin[:self.nsamp,i],\
-                self.xconrevs[i].conmc(self.x[:,i],np.empty(0)))
-            xin = pt.set_subtensor(xin[self.nsamp:,i],\
-                self.xconrevs[i].conmc(priors[i],np.empty(0)))
-        if check:
-          raise Exception('Error: iwgp set to true but none of xconrevs are wgp classes')
+      # Convert x inputs
+      xin = pt.zeros((self.nsamp+1,self.nx))
+      xin = pt.set_subtensor(xin[:-1,:],self.xc)
+      for j in range(self.nx):
+        xin = pt.set_subtensor(xin[-1,j],\
+            self.xconrevs[j].conmc(priors[j]))
+
+      # Establish kernel
+      for j in range(self.nkern):
+        if self.kerns[j] == 'RBF':
+          kerni = self.hypers['kv'][j]*pm.gp.cov.ExpQuad(self.nx,\
+              ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
+        elif self.kerns[j] == 'RatQuad':
+          # Only works if only one ratquad kernel specified 
+          kerni = self.hypers['kv'][j]*pm.gp.cov.RatQuad(self.nx,alpha=self.hypers['alpha'],\
+              ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
+        elif self.kerns[j] == 'Matern52':
+          kerni = self.hypers['kv'][j]*pm.gp.cov.Matern52(self.nx,\
+              ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
+        elif self.kerns[j] == 'Matern32':
+          kerni = self.hypers['kv'][j]*pm.gp.cov.Matern32(self.nx,\
+              ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
+        elif self.kerns[j] == 'Exponential':
+          kerni = self.hypers['kv'][j]*pm.gp.cov.Exponential(self.nx,\
+              ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
+
+        # Apply kernel operations if more than one kern specified
+        if j == 0:
+          kern = kerni
+        elif self.ops[j-1] == '+':
+          kern += kerni
+        elif self.ops[j-1] == '*':
+          kern *= kerni
+
+      # Set y vector
+      yin = np.zeros(self.nsamp+1)
+      yin[:-1] = self.yc[:,0]
+      yin[-1] = self.yconrevs[0].con(yobs)
+
+      # Get y derivative
+      yfull = np.r_[self.y[:,0],np.array([yobs])]
+      yder = self.yconrevs[0].der(yfull)
+
+      # Evaluate likelihood
+      nsamp = len(yin)
+      K = kern(xin)
+      if self.noise:
+        K += pt.identity_like(K)*(jitter+self.hypers['gv'])
       else:
-        xin = pt.set_subtensor(xin[:self.nsamp],self.xc)
-        for i in range(self.nx):
-          if isinstance(self.xconrevs[i],wgp):
-            xin = pt.set_subtensor(xin[self.nsamp:,i],\
-                self.xconrevs[i].conmc(priors[i],\
-                pt.as_tensor_variable(self.xconrevs[i].params)))
-          else:
-            xin = pt.set_subtensor(xin[self.nsamp:,i],\
-                self.xconrevs[i].conmc(priors[i],np.empty(0)))
+        K += pt.identity_like(K)*jitter
+      L = pt.slinalg.cholesky(K)
+      beta = pt.slinalg.solve_triangular(L,yin,lower=True)
+      alpha = pt.slinalg.solve_triangular(L.T,beta)
+      y_ = pm.Potential('yopt',-0.5*pt.dot(yin.T,alpha)\
+          -pt.sum(pt.log(pt.diag(L)))\
+          -0.5*nsamp*pt.log(2*np.pi)\
+          +pt.sum(pt.log(yder)))
 
-      # Setup kernel
-      if self.kernel == 'RBF':
-        kern = kvar*pm.gp.cov.ExpQuad(self.nx,ls=kls)
-      elif self.kernel == 'Matern52':
-        kern = kvar*pm.gp.cov.Matern52(self.nx,ls=kls)
-      elif self.kernel == 'Matern32':
-        kern = kvar*pm.gp.cov.Matern32(self.nx,ls=kls)
-      elif self.kernel == 'Exponential':
-        kern = kvar*pm.gp.cov.Exponential(self.nx,ls=kls)
-
-      # GP and likelihood
-      gp = pm.gp.Marginal(cov_func=kern)
-      y_ = gp.marginal_likelihood("y", X=xin, y=yin, noise=gvar)
-
-      # Fit and process results depending on method
+      # Perform optimisation
       if method == 'map':
-        data = pm.find_MAP(**kwargs)
+        start = {str(ky):np.random.normal() for ky in mopt.cont_vars}
+        data = pm.find_MAP(start=start,**kwargs)
         mp = copy.deepcopy(data)
+        mpcheck = {str(ky):mp[str(ky)] for ky in mopt.cont_vars}
+        print(mopt.point_logps(point=mpcheck))
       else:
         data = pm.sample(**kwargs)
         if method == 'mcmc_mean':
           mp = self.mean_extract(data)
         elif method == 'mcmc_map':
           mp = self.map_extract(data)
+          try:
+            mp = pm.find_MAP(start=mp)
+          except:
+            pass
         else:
-          raise Exception('method must be one of map, mcmc_map, or mcmc_mean')
+          raise Exception(\
+              'method must be one of map, mcmc_map, or mcmc_mean')
 
-      mp['x'] = np.array([mp['x0'],mp['x1'],mp['x2']])
-      self.xopt = mp['x']
+    # Extract sample from dictionary
+    xopt = np.zeros((1,self.nx))
+    for j in range(self.nx):
+      xopt[0,j] = mp[f'x{j}']
 
-      # Input warping update
-      if iwgp:
-        self.iwgp_set(mp['iwgp'])
+    # Check prediction at xsamp
+    ypred = self.predict(xopt)
+    if self.verbose:
+      print(f'Predicted {ypred} at x point {xopt}')
 
-    return m, gp, mp, data
+    if evaluate_opt:
+      # Evaluate and update datasets
+      xsamp,ysamp = self._core__vector_solver(xopt)
+      xm,ym = self._core__vector_solver(xopt,self.mean)
+      self.x = np.r_[self.x,xsamp]
+      self.y = np.r_[self.y,ysamp]
+      self.xc = np.r_[self.xc,self.__xconrev__(xsamp)]
+      self.yc = np.r_[self.yc,self.__yconrev__(ysamp)]
+      self.ym = np.r_[self.ym,ym]
+      self.nsamp = len(self.x)
+      
+      if self.verbose:
+        print(f'Actual evaluation is {ysamp+ym} at x point {xsamp}')
+
+      return data, xopt, ysamp
+    else:
+      return data, xopt
+
+
+  """
+
+  def portable_save(self,fname):
+    pg = copy.deepcopy(self)
+    pg.target = None
+    pg.constraints = None
+    save_object(pg,fname)
   """
