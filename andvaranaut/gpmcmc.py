@@ -670,6 +670,9 @@ class GPMCMC(LHC):
     if self.m is None:
       raise Exception('Model must be fitted before running Bayesian optimisation')
 
+    if method == 'exploit':
+      eps = 0.0
+
     # Iterate through optimisation algorithm
     xsampold = np.array([[1e300 for i in range(self.nx)]])
     for i in range(max_iter):
@@ -761,9 +764,9 @@ class GPMCMC(LHC):
         yi = pt.sqrt(2*ycpvar)*xi+ycpmean*pt.ones_like(xi)
         yir = self.yconrevs[0].revmc(yi)+self.mean(xin)
         ypmean = 1/np.sqrt(np.pi)*pt.dot(wi,yir)
-        #yir2 = pt.power(yir,2)
-        #ym2 = 1/np.sqrt(np.pi)*pt.dot(wi,yir2)
-        #ypvar = ym2-pt.power(ypmean,2)
+        yir2 = pt.power(yir,2)
+        ym2 = 1/np.sqrt(np.pi)*pt.dot(wi,yir2)
+        ypvar = ym2-pt.power(ypmean,2)
 
         # Expected improvement specific methods
         if method == 'EI':
@@ -778,51 +781,30 @@ class GPMCMC(LHC):
           EI = 1/np.sqrt(np.pi)*pt.dot(wi,ydiff)
 
       # Choose opt algorithm
-      # Greedy eps random search
-      if method == 'eps-RS':
-
-        # Roll for opt mean or random search
-        roll = np.random.rand()
-        if roll > eps:
-          with mopt:
-            # Maximise or minimise mean prediction
-            if opt_type == 'max':
-              y_ = pm.Potential('pot',ypmean)
-            else:
-              y_ = pm.Potential('pot',-ypmean)
-
-            # Perform optimisation
-            if opt_method == 'map':
-              start = {str(ky):np.random.normal() for ky in mopt.cont_vars}
-              data = pm.find_MAP(start=start,**kwargs)
-              mp = copy.deepcopy(data)
-              mpcheck = {str(ky):mp[str(ky)] for ky in mopt.cont_vars}
-              print(mopt.point_logps(point=mpcheck))
-            else:
-              data = pm.sample(**kwargs)
-              if opt_method == 'mcmc_mean':
-                mp = self.mean_extract(data)
-              elif opt_method == 'mcmc_map':
-                mp = self.map_extract(data)
-                try:
-                  mp = pm.find_MAP(start=mp)
-                except:
-                  pass
-              else:
-                raise Exception(\
-                    'opt_method must be one of map, mcmc_map, or mcmc_mean')
-
-          # Extract sample from dictionary
-          xsamp = np.zeros((1,self.nx))
-          for j in range(self.nx):
-            xsamp[0,j] = mp[f'x{j}']
-        else:
-          xsamp = np.array([[j.rvs() for j in self.priors]])
-      elif method == 'EI':
+      # Greedy eps random search or pure exploit (eps=0)
+      if method == 'eps-RS' or method == 'exploit':
         with mopt:
           # Maximise or minimise mean prediction
+          if opt_type == 'max':
+            y_ = pm.Potential('pot',ypmean)
+          else:
+            y_ = pm.Potential('pot',-ypmean)
+      # Pure exploration
+      elif method == 'explore':
+        with mopt:
+          # Maximise variance prediction
+          y_ = pm.Potential('pot',ypvar)
+      # Expected improvement
+      elif method == 'EI':
+        with mopt:
+          # Maximise expected improvement
           y_ = pm.Potential('pot',EI)
+      else:
+        raise Exception('method must be one of eps-RS ,EI, exploit, or explore')
 
+      roll = np.random.rand()
+      if method != 'eps-RS' or (method == 'eps-RS' and roll > eps):
+        with mopt:
           # Perform optimisation
           if opt_method == 'map':
             start = {str(ky):np.random.normal() for ky in mopt.cont_vars}
@@ -843,12 +825,13 @@ class GPMCMC(LHC):
             else:
               raise Exception(\
                   'opt_method must be one of map, mcmc_map, or mcmc_mean')
+
         # Extract sample from dictionary
         xsamp = np.zeros((1,self.nx))
         for j in range(self.nx):
           xsamp[0,j] = mp[f'x{j}']
       else:
-        raise Exception('Error: method must be one of eps-RS or EI')
+        xsamp = np.array([[j.rvs() for j in self.priors]])
 
       # Evaluate convergence
       xdiff = np.sum(np.abs(xsamp-xsampold)/np.abs(xsampold))/self.nx
@@ -1020,7 +1003,7 @@ class GPMCMC(LHC):
       plt.bar([f'x[{i}]'for i in range(self.nx)],np.log(1/self.hypers['l']))
     else:
       plt.bar([f'x[{i}]'for i in range(self.nx)],1/self.hypers['l'])
-    plt.ylabel('Relative log importance')
+    plt.ylabel('Relative importance')
     plt.show()
 
   # Fit GP with inverse optimisation
