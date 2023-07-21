@@ -16,7 +16,7 @@ import ray
 import pymc as pm
 import arviz as az
 import pytensor.tensor as pt
-from scipy.optimize import Bounds
+from scipy.optimize import Bounds, differential_evolution, minimize
 from scipy.stats._continuous_distns import uniform_gen, norm_gen
 import re
 
@@ -526,7 +526,8 @@ class GPMCMC(LHC):
     self.hypers = None
 
   # Standard predict method which wraps the GPy predict and allows for parallelism
-  def predict(self,x,return_var=False,convert=True,revert=True,normvar=True,jitter=1e-6):
+  def predict(self,x,return_var=False,convert=True,revert=True,normvar=True,jitter=1e-6,\
+      EI=False,EIopt=None,deg=8):
     if convert:
       xarg = np.zeros_like(x)
       for i in range(self.nx):
@@ -540,7 +541,7 @@ class GPMCMC(LHC):
 
     if revert:
       # Revert transforms
-      y,yv = self.__gh_stats(x,y,yv,normvar)
+      y,yv = self.__gh_stats(x,y,yv,normvar,deg,EI=EI,EIopt=EIopt)
 
     if return_var:
       return y, yv
@@ -548,15 +549,23 @@ class GPMCMC(LHC):
       return y
 
   # Get mean and variance of reverted variable by Gauss-Hermite quadrature
-  def __gh_stats(self,x,y,yv,normvar=True,deg=8):
+  def __gh_stats(self,x,y,yv,normvar=True,deg=8,EI=False,EIopt=None):
 
     # Reversion
     xi,wi = np.polynomial.hermite.hermgauss(deg)
     for i in range(len(y)):
       yi = np.sqrt(2*yv[i,0])*xi+y[i,0]
       yir = self.yconrevs[0].rev(yi)+self.mean(x[i,:])
+      if EI:
+        if EIopt == 'max':
+          ydiff = yir-self.yopt
+        else:
+          ydiff = self.yopt-yir
+        ydiff = np.where(ydiff > 0.0, ydiff, 0.0)
+        y[i,0] = 1/np.sqrt(np.pi)*np.sum(wi*ydiff)
+      else:
+        y[i,0] = 1/np.sqrt(np.pi)*np.sum(wi*yir)
       yir2 = np.power(yir,2)
-      y[i,0] = 1/np.sqrt(np.pi)*np.sum(wi*yir)
       ym2 = 1/np.sqrt(np.pi)*np.sum(wi*yir2)
       yv[i,0] = ym2-y[i,0]**2
 
@@ -600,8 +609,6 @@ class GPMCMC(LHC):
         ubs[i] = self.xconrevs[i].con(self.priors[i].isf(tiny))
     bnds = Bounds(lb=lbs,ub=ubs)
 
-    ## TODO: Constraint setup
-    
     # Setup objective function which is target plus conversion/reversion
     def target_transform(xc):
       xr = np.zeros_like(xc)
@@ -644,8 +651,9 @@ class GPMCMC(LHC):
     return xopt,yopt
 
   # Perform Bayesian optimisation
-  def BO(self,opt_type='min',opt_method='map',fit_method='map',max_iter=16,\
-      method='eps-RS',eps=0.1,iwgp=False,cwgp=False,jitter=1e-6,conv=0.1,**kwargs):
+  def BO(self,opt_type='min',opt_method='predict',fit_method='map',max_iter=16,\
+      method='EI',eps=0.1,iwgp=False,cwgp=False,jitter=1e-6,conv=0.01,\
+      predict_samps=100000,normvar=True,refine=True,**kwargs):
 
 
     if self.ny > 1:
@@ -673,6 +681,14 @@ class GPMCMC(LHC):
     if method == 'exploit':
       eps = 0.0
 
+    # Get bounds from prior distributions
+    lbs = np.zeros(self.nx)
+    ubs = np.zeros(self.nx)
+    for j in range(self.nx):
+      lbs[j] = self.priors[j].ppf(1e-8)
+      ubs[j] = self.priors[j].isf(1e-8)
+    bnds = Bounds(lbs,ubs)
+
     # Iterate through optimisation algorithm
     xsampold = np.array([[1e300 for i in range(self.nx)]])
     for i in range(max_iter):
@@ -680,158 +696,212 @@ class GPMCMC(LHC):
       if self.verbose:
         print(f'Iteration {i}')
 
-      # New mopt instance each iteration
-      mopt = pm.Model()
-      with mopt:
+      if opt_method == 'DE' or opt_method == 'predict':
 
-        # Convert distributions from scipy to pymc
-        priors = []
-        for k,j in enumerate(self.priors):
-          if isinstance(j.dist,uniform_gen):
-            if len(j.args) >= 2:
-              prior = pm.Uniform(f'x{k}',lower=j.args[0],\
-                  upper=j.args[0]+j.args[1])
-            elif len(j.args) == 1:
-              prior = pm.Uniform(f'x{k}',lower=j.args[0],\
-                  upper=j.args[0]+j.kwds['scale'])
+        # Choose opt algorithm
+        # Greedy eps random search or pure exploit (eps=0)
+        if method == 'eps-RS' or method == 'exploit':
+          def optf(x):
+            if x.ndim == 1:
+              x = np.array([x])
+            ym = self.predict(x)
+            if opt_type == 'min':
+              return ym[:,0]
             else:
-              prior = pm.Uniform(f'x{k}',lower=j.kwds['loc'],\
-                  upper=j.kwds['loc']+j.kwds['scale'])
-          elif isinstance(j.dist,norm_gen):
-            if len(j.args) >= 2:
-              prior = pm.Normal(f'x{k}',mu=j.args[0],\
-                  sigma=j.args[1])
-            elif len(j.args) == 1:
-              prior = pm.Normal(f'x{k}',mu=j.args[0],\
-                  sigma=j.kwds['scale'])
-            else:
-              prior = pm.Normal(f'x{k}',mu=j.kwds['loc'],\
-                  sigma=j.kwds['scale'])
-          else:
-            raise Exception('Prior distribution conversion from scipy to pymc not implemented')
-          priors.append(prior)
-
-        # Convert x inputs
-        xin = pt.zeros((1,self.nx))
-        for j in range(self.nx):
-          xin = pt.set_subtensor(xin[0,j],\
-              self.xconrevs[j].conmc(priors[j]))
-
-        # Establish kernel
-        for j in range(self.nkern):
-          if self.kerns[j] == 'RBF':
-            kerni = self.hypers['kv'][j]*pm.gp.cov.ExpQuad(self.nx,\
-                ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
-          elif self.kerns[j] == 'RatQuad':
-            # Only works if only one ratquad kernel specified 
-            kerni = self.hypers['kv'][j]*pm.gp.cov.RatQuad(self.nx,alpha=self.hypers['alpha'],\
-                ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
-          elif self.kerns[j] == 'Matern52':
-            kerni = self.hypers['kv'][j]*pm.gp.cov.Matern52(self.nx,\
-                ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
-          elif self.kerns[j] == 'Matern32':
-            kerni = self.hypers['kv'][j]*pm.gp.cov.Matern32(self.nx,\
-                ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
-          elif self.kerns[j] == 'Exponential':
-            kerni = self.hypers['kv'][j]*pm.gp.cov.Exponential(self.nx,\
-                ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
-
-          # Apply kernel operations if more than one kern specified
-          if j == 0:
-            kern = kerni
-          elif self.ops[j-1] == '+':
-            kern += kerni
-          elif self.ops[j-1] == '*':
-            kern *= kerni
-
-        # Build map to mean and variance predictions
-        K = kern(self.xc)
-        kstar = kern(self.xc,xin)
-        if self.noise:
-          K += pt.identity_like(K)*(jitter+self.hypers['gv'])
+              return -ym[:,0]
+        # Pure exploration
+        elif method == 'explore':
+          def optf(x):
+            if x.ndim == 1:
+              x = np.array([x])
+            ym,yv = self.predict(x,return_var=True,normvar=normvar)
+            return -yv[:,0]
+        # Expected improvement
+        elif method == 'EI':
+          def optf(x):
+            if x.ndim == 1:
+              x = np.array([x])
+            ym = self.predict(x,EI=True,EIopt = opt_type)
+            return -ym[:,0]
         else:
-          K += pt.identity_like(K)*jitter
-        L = pt.slinalg.cholesky(K)
-        beta = pt.slinalg.solve_triangular(L,self.yc,lower=True)
-        alpha = pt.slinalg.solve_triangular(L.T,beta)
-        ycpmean = pt.sum(pt.dot(kstar.T,alpha))
-        kstarstar = kern(xin)
-        v = pt.slinalg.solve_triangular(L,kstar,lower=True)
-        ycpvar = pt.sum(kstarstar-pt.dot(v.T,v))
+          raise Exception('method must be one of eps-RS ,EI, exploit, or explore')
 
-        # Revert using Gauss quadrature
-        xi,wi = np.polynomial.hermite.hermgauss(8)
-        yi = pt.sqrt(2*ycpvar)*xi+ycpmean*pt.ones_like(xi)
-        yir = self.yconrevs[0].revmc(yi)+self.mean(xin)
-        ypmean = 1/np.sqrt(np.pi)*pt.dot(wi,yir)
-        yir2 = pt.power(yir,2)
-        ym2 = 1/np.sqrt(np.pi)*pt.dot(wi,yir2)
-        ypvar = ym2-pt.power(ypmean,2)
-
-        # Expected improvement specific methods
-        if method == 'EI':
-          ycoptm, ycoptv = \
-              self.__predict(self.m,self.gp,self.hypers,np.array([self.xopt]))
-          yiopt = np.sqrt(2*ycoptv[:,0])*xi+ycoptm[:,0]
-          yioptr = self.yconrevs[0].rev(yiopt)+self.mean(self.xopt)
-          if opt_type == 'max':
-            ydiff = pt.maximum(pt.zeros_like(xi),yir-yioptr)
+        # Opt or random if greedy search algorithm
+        roll = np.random.rand()
+        if method != 'eps-RS' or (method == 'eps-RS' and roll > eps):
+          if opt_method == 'DE':
+            # Differential evolution
+            verb = self.verbose
+            self.verbose = False
+            res = differential_evolution(optf,bnds)
+            self.verbose = verb
+            xsamp = np.array([res.x])
+            if self.verbose:
+              print(f'Function opt is {res.fun:0.3f}')
           else:
-            ydiff = pt.maximum(pt.zeros_like(xi),yioptr-yir)
-          EI = 1/np.sqrt(np.pi)*pt.dot(wi,ydiff)
+            # LHC Sample and evaluate
+            xsamps = self._LHC__latin_sample(predict_samps)
+            ysamps = optf(xsamps)
+            # Pick best
+            xsamp = np.array([xsamps[np.argmin(ysamps),:]])
+            if self.verbose:
+              print(f'Function opt is {np.min(ysamps):0.3f}')
+        else:
+          xsamp = np.array([[j.rvs() for j in self.priors]])
 
-      # Choose opt algorithm
-      # Greedy eps random search or pure exploit (eps=0)
-      if method == 'eps-RS' or method == 'exploit':
-        with mopt:
-          # Maximise or minimise mean prediction
-          if opt_type == 'max':
-            y_ = pm.Potential('pot',ypmean)
-          else:
-            y_ = pm.Potential('pot',-ypmean)
-      # Pure exploration
-      elif method == 'explore':
-        with mopt:
-          # Maximise variance prediction
-          y_ = pm.Potential('pot',ypvar)
-      # Expected improvement
-      elif method == 'EI':
-        with mopt:
-          # Maximise expected improvement
-          y_ = pm.Potential('pot',EI)
       else:
-        raise Exception('method must be one of eps-RS ,EI, exploit, or explore')
-
-      roll = np.random.rand()
-      if method != 'eps-RS' or (method == 'eps-RS' and roll > eps):
+        # New mopt instance each iteration
+        mopt = pm.Model()
         with mopt:
-          # Perform optimisation
-          if opt_method == 'map':
-            start = {str(ky):np.random.normal() for ky in mopt.cont_vars}
-            data = pm.find_MAP(start=start,**kwargs)
-            mp = copy.deepcopy(data)
-            mpcheck = {str(ky):mp[str(ky)] for ky in mopt.cont_vars}
-            print(mopt.point_logps(point=mpcheck))
-          else:
-            data = pm.sample(**kwargs)
-            if opt_method == 'mcmc_mean':
-              mp = self.mean_extract(data)
-            elif opt_method == 'mcmc_map':
-              mp = self.map_extract(data)
-              try:
-                mp = pm.find_MAP(start=mp)
-              except:
-                pass
+
+          # Convert distributions from scipy to pymc
+          priors = []
+          for k,j in enumerate(self.priors):
+            if isinstance(j.dist,uniform_gen):
+              if len(j.args) >= 2:
+                prior = pm.Uniform(f'x{k}',lower=j.args[0],\
+                    upper=j.args[0]+j.args[1])
+              elif len(j.args) == 1:
+                prior = pm.Uniform(f'x{k}',lower=j.args[0],\
+                    upper=j.args[0]+j.kwds['scale'])
+              else:
+                prior = pm.Uniform(f'x{k}',lower=j.kwds['loc'],\
+                    upper=j.kwds['loc']+j.kwds['scale'])
+            elif isinstance(j.dist,norm_gen):
+              if len(j.args) >= 2:
+                prior = pm.Normal(f'x{k}',mu=j.args[0],\
+                    sigma=j.args[1])
+              elif len(j.args) == 1:
+                prior = pm.Normal(f'x{k}',mu=j.args[0],\
+                    sigma=j.kwds['scale'])
+              else:
+                prior = pm.Normal(f'x{k}',mu=j.kwds['loc'],\
+                    sigma=j.kwds['scale'])
             else:
-              raise Exception(\
-                  'opt_method must be one of map, mcmc_map, or mcmc_mean')
+              raise Exception('Prior distribution conversion from scipy to pymc not implemented')
+            priors.append(prior)
 
-        # Extract sample from dictionary
-        xsamp = np.zeros((1,self.nx))
-        for j in range(self.nx):
-          xsamp[0,j] = mp[f'x{j}']
-      else:
-        xsamp = np.array([[j.rvs() for j in self.priors]])
+          # Convert x inputs
+          xin = pt.zeros((1,self.nx))
+          for j in range(self.nx):
+            xin = pt.set_subtensor(xin[0,j],\
+                self.xconrevs[j].conmc(priors[j]))
+
+          # Establish kernel
+          for j in range(self.nkern):
+            if self.kerns[j] == 'RBF':
+              kerni = self.hypers['kv'][j]*pm.gp.cov.ExpQuad(self.nx,\
+                  ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
+            elif self.kerns[j] == 'RatQuad':
+              # Only works if only one ratquad kernel specified 
+              kerni = self.hypers['kv'][j]*pm.gp.cov.RatQuad(self.nx,alpha=self.hypers['alpha'],\
+                  ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
+            elif self.kerns[j] == 'Matern52':
+              kerni = self.hypers['kv'][j]*pm.gp.cov.Matern52(self.nx,\
+                  ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
+            elif self.kerns[j] == 'Matern32':
+              kerni = self.hypers['kv'][j]*pm.gp.cov.Matern32(self.nx,\
+                  ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
+            elif self.kerns[j] == 'Exponential':
+              kerni = self.hypers['kv'][j]*pm.gp.cov.Exponential(self.nx,\
+                  ls=self.hypers['l'][j*self.nx:(j+1)*self.nx])
+
+            # Apply kernel operations if more than one kern specified
+            if j == 0:
+              kern = kerni
+            elif self.ops[j-1] == '+':
+              kern += kerni
+            elif self.ops[j-1] == '*':
+              kern *= kerni
+
+          # Build map to mean and variance predictions
+          K = kern(self.xc)
+          kstar = kern(self.xc,xin)
+          if self.noise:
+            K += pt.identity_like(K)*(jitter+self.hypers['gv'])
+          else:
+            K += pt.identity_like(K)*jitter
+          L = pt.slinalg.cholesky(K)
+          beta = pt.slinalg.solve_triangular(L,self.yc,lower=True)
+          alpha = pt.slinalg.solve_triangular(L.T,beta)
+          ycpmean = pt.sum(pt.dot(kstar.T,alpha))
+          kstarstar = kern(xin)
+          v = pt.slinalg.solve_triangular(L,kstar,lower=True)
+          ycpvar = pt.sum(kstarstar-pt.dot(v.T,v))
+
+          # Revert using Gauss quadrature
+          xi,wi = np.polynomial.hermite.hermgauss(8)
+          yi = pt.sqrt(2*ycpvar)*xi+ycpmean*pt.ones_like(xi)
+          yir = self.yconrevs[0].revmc(yi)+self.mean(xin)
+          ypmean = 1/np.sqrt(np.pi)*pt.dot(wi,yir)
+          yir2 = pt.power(yir,2)
+          ym2 = 1/np.sqrt(np.pi)*pt.dot(wi,yir2)
+          ypvar = ym2-pt.power(ypmean,2)
+
+          # Expected improvement specific methods
+          if method == 'EI':
+            #ycoptm, ycoptv = \
+            #    self.__predict(self.m,self.gp,self.hypers,np.array([self.xopt]))
+            #yiopt = np.sqrt(2*ycoptv[:,0])*xi+ycoptm[:,0]
+            #yioptr = self.yconrevs[0].rev(yiopt)+self.mean(self.xopt)
+            if opt_type == 'max':
+              ydiff = pt.maximum(pt.zeros_like(xi),yir-self.yopt*pt.ones_like(xi))
+            else:
+              ydiff = pt.maximum(pt.zeros_like(xi),self.yopt*pt.ones_like(xi)-yir)
+            EI = 1/np.sqrt(np.pi)*pt.dot(wi,ydiff)
+
+        # Choose opt algorithm
+        # Greedy eps random search or pure exploit (eps=0)
+        if method == 'eps-RS' or method == 'exploit':
+          with mopt:
+            # Maximise or minimise mean prediction
+            if opt_type == 'max':
+              y_ = pm.Potential('pot',ypmean)
+            else:
+              y_ = pm.Potential('pot',-ypmean)
+        # Pure exploration
+        elif method == 'explore':
+          with mopt:
+            # Maximise variance prediction
+            y_ = pm.Potential('pot',ypvar)
+        # Expected improvement
+        elif method == 'EI':
+          with mopt:
+            # Maximise expected improvement
+            y_ = pm.Potential('pot',EI)
+        else:
+          raise Exception('method must be one of eps-RS ,EI, exploit, or explore')
+
+        roll = np.random.rand()
+        if method != 'eps-RS' or (method == 'eps-RS' and roll > eps):
+          with mopt:
+            # Perform optimisation
+            if opt_method == 'map':
+              start = {str(ky):np.random.normal() for ky in mopt.cont_vars}
+              data = pm.find_MAP(start=start,**kwargs)
+              mp = copy.deepcopy(data)
+              mpcheck = {str(ky):mp[str(ky)] for ky in mopt.cont_vars}
+              print(mopt.point_logps(point=mpcheck))
+            else:
+              data = pm.sample(**kwargs)
+              if opt_method == 'mcmc_mean':
+                mp = self.mean_extract(data)
+              elif opt_method == 'mcmc_map':
+                mp = self.map_extract(data)
+                try:
+                  mp = pm.find_MAP(start=mp)
+                except:
+                  pass
+              else:
+                raise Exception(\
+                    'opt_method must be one of map, mcmc_map, or mcmc_mean')
+
+          # Extract sample from dictionary
+          xsamp = np.zeros((1,self.nx))
+          for j in range(self.nx):
+            xsamp[0,j] = mp[f'x{j}']
+        else:
+          xsamp = np.array([[j.rvs() for j in self.priors]])
 
       # Evaluate convergence
       xdiff = np.sum(np.abs(xsamp-xsampold)/np.abs(xsampold))/self.nx
@@ -1150,8 +1220,11 @@ class GPMCMC(LHC):
       if self.verbose:
         print(f'Actual evaluation is {ysamp+ym} at x point {xsamp}')
 
+      xopt = xopt[0,:]
+      ysamp = ysamp[0]
       return data, xopt, ysamp
     else:
+      xopt = xopt[0,:]
       return data, xopt
 
 
