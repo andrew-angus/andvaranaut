@@ -279,13 +279,13 @@ class maxmin(affine):
       self.a = -xmin/xminus+safety
       self.b = 1/xminus
 class uniform(affine):
-  def __init__(self,dist):
-    self.con = partial(std_uniform,dist=dist)
-    self.rev = partial(uniform_rev,dist=dist)
+  def __init__(self,dist,safety=1e-10):
+    #self.con = partial(std_uniform,dist=dist)
+    #self.rev = partial(uniform_rev,dist=dist)
     intv = dist.interval(1.0)
-    span = intv[1]-intv[0]
-    self.a = -intv[0]/span
-    self.b = 1/span
+    xminus = (intv[1]-intv[0])/(1-2*safety)
+    self.a = -intv[0]/xminus + safety
+    self.b = 1/xminus
 class arcsinh:
   def __init__(self,a,b,c,d):
     self.a = a
