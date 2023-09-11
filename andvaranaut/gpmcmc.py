@@ -749,7 +749,8 @@ class GPMCMC(LHC):
         else:
           xsamp = np.array([[j.rvs() for j in self.priors]])
 
-      else:
+      if not (opt_method == 'DE' or opt_method == 'predict') or \
+          (opt_method == 'predict' and refine):
         # New mopt instance each iteration
         mopt = pm.Model()
         with mopt:
@@ -876,9 +877,15 @@ class GPMCMC(LHC):
         if method != 'eps-RS' or (method == 'eps-RS' and roll > eps):
           with mopt:
             # Perform optimisation
-            if opt_method == 'map':
-              start = {str(ky):np.random.normal() for ky in mopt.cont_vars}
-              data = pm.find_MAP(start=start,**kwargs)
+            if opt_method == 'map' or (opt_method == 'predict' and refine):
+              if opt_method == 'map': 
+                start = {str(ky):np.random.normal() for ky in mopt.cont_vars}
+                data = pm.find_MAP(start=start,**kwargs)
+              else:
+                for ix in range(len(priors)):
+                  mopt.initial_values[mopt.free_RVs[ix]] = xsamp[0,ix]
+                print(f'Refining {xsamp[0,:]}')
+                data = pm.find_MAP(**kwargs)
               mp = copy.deepcopy(data)
               mpcheck = {str(ky):mp[str(ky)] for ky in mopt.cont_vars}
               print(mopt.point_logps(point=mpcheck))
