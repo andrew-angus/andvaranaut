@@ -332,25 +332,29 @@ class GPMCMC(LHC):
       # Fit and process results depending on method
       if method == 'map':
         maxl = np.finfo(np.float64).min
-        for i in range(restarts):
-          start = {str(ky):np.random.normal() for ky in m.cont_vars}
-          try:
-            data = pm.find_MAP(**kwargs)
-            mp = copy.deepcopy(data)
-            mpcheck = {str(ky):mp[str(ky)] for ky in m.cont_vars}
-            logps = m.point_logps(point=mpcheck)
-            logsum = np.sum(np.array([logps[str(ky)] for ky in logps.keys()]))
-            #print(start)
-            #print(logps)
-            #print(logsum)
-            #print('')
-          except:
-            print('Restart failed')
-            logsum = maxl
-          if logsum > maxl:
-            mpmax = mp
-            maxl = logsum
-        mp = mpmax
+        if restarts > 1:
+          for i in range(restarts):
+            start = {str(ky):np.random.normal() for ky in m.cont_vars}
+            try:
+              data = pm.find_MAP(**kwargs)
+              mp = copy.deepcopy(data)
+              mpcheck = {str(ky):mp[str(ky)] for ky in m.cont_vars}
+              logps = m.point_logps(point=mpcheck)
+              logsum = np.sum(np.array([logps[str(ky)] for ky in logps.keys()]))
+              #print(start)
+              #print(logps)
+              #print(logsum)
+              #print('')
+            except:
+              print('Restart failed')
+              logsum = maxl
+            if logsum > maxl:
+              mpmax = mp
+              maxl = logsum
+          mp = mpmax
+        else:
+          data = pm.find_MAP(**kwargs)
+          mp = copy.deepcopy(data)
       elif method == 'none':
         data = None
         mp = self.hypers
