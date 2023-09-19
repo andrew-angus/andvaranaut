@@ -585,7 +585,8 @@ class GPMCMC(LHC):
       print('Predicting...')
     t0 = stopwatch()
     with m:
-      ypreds, yvarpreds = gp.predict(x, point=hyps,  diag=True,jitter=jitter)
+      ypreds, yvarpreds = gp.predict(x, point=hyps,diag=True,\
+          jitter=jitter,pred_noise=True)
     t1 = stopwatch()
     if self.verbose:
       print(f'Time taken: {t1-t0:0.2f} s')
@@ -842,6 +843,8 @@ class GPMCMC(LHC):
           yir2 = pt.power(yir,2)
           ym2 = 1/np.sqrt(np.pi)*pt.dot(wi,yir2)
           ypvar = ym2-pt.power(ypmean,2)
+          if normvar:
+            ypvar /= ypmean**2
 
           # Expected improvement specific methods
           if method == 'EI':
