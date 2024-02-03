@@ -22,11 +22,9 @@ setup(
 
   python_requires='>=3.6',
   install_requires=[
-    "setuptools<66.0.0",
-    "GPy",
+    "setuptools",
     "pymc",
-    "gpyopt",
-    "numpy<=1.23.5",
+    "numpy",
     "scipy",
     "py-design",
     "ray",

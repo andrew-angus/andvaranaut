@@ -529,7 +529,7 @@ class GPMCMC(LHC):
     self.gp = None
     self.hypers = None
 
-  # Standard predict method which wraps the GPy predict and allows for parallelism
+  # Standard predict method which wraps the pymc predict
   def predict(self,x,return_var=False,convert=True,revert=True,normvar=True,jitter=1e-6,\
       EI=False,EIopt=None,deg=8):
     if convert:
@@ -579,7 +579,7 @@ class GPMCMC(LHC):
 
     return y, yv
 
-  # Private predict method with more flexibility to act on any provided GPy model
+  # Private predict method with more flexibility to act on any provided model
   def __predict(self,m,gp,hyps,x,jitter=1e-6):
     if self.verbose:
       print('Predicting...')
@@ -591,69 +591,6 @@ class GPMCMC(LHC):
     if self.verbose:
       print(f'Time taken: {t1-t0:0.2f} s')
     return ypreds.reshape((-1,1)),yvarpreds.reshape((-1,1))
-
-  # Minimise output variable using GPyOpt 
-  def bayesian_minimisation(self,max_iter=15,minmax=False,restarts=5,revert=True):
-
-    if self.ny > 1:
-      raise Exception('Bayesian minimisation only implemented for single output')
-
-    if self.verbose:
-      print('Running Bayesian minimisation...')
-    
-    # Setup domain as list of dictionaries for each variable
-    lbs = np.zeros(self.nx)
-    ubs = np.zeros(self.nx)
-    tiny = np.finfo(np.float64).tiny
-    for i in range(self.nx):
-      if minmax:
-        lbs[i] = np.min(self.xc[:,i])
-        ubs[i] = np.max(self.xc[:,i])
-      else:
-        lbs[i] = self.xconrevs[i].con(self.priors[i].ppf(tiny))
-        ubs[i] = self.xconrevs[i].con(self.priors[i].isf(tiny))
-    bnds = Bounds(lb=lbs,ub=ubs)
-
-    # Setup objective function which is target plus conversion/reversion
-    def target_transform(xc):
-      xr = np.zeros_like(xc)
-      for i in range(self.nx):
-        xr[i] = self.xconrevs[i].rev(xc[i])
-      xr,yr = self._core__vector_solver(np.array([xr]))
-      xm,ym = self._core__vector_solver(np.array([xr]),self.mean)
-      yc = self.yconrevs[0].con(yr[:,0]-ym[:,0])
-      # Update database with new BO samples
-      self.x = np.r_[self.x,xr]
-      self.y = np.r_[self.y,yr]
-      self.xc = np.r_[self.xc,np.array([xc])]
-      self.yc = np.r_[self.yc,np.array([yc])]
-      self.ym = np.r_[self.ym,ym]
-      self.nsamp = len(self.x)
-      return yc
-
-    # Run optimisation
-    try:
-      res = self._core__opt(target_transform,'BO',self.nx,restarts,\
-          bounds=bnds,max_iter=max_iter)
-      xopt = res.x
-      yopt = res.fun
-
-      # Revert to original data
-      if revert:
-        yopt = self.yconrevs[0].rev(yopt)+self.mean(xopt)
-        for i in range(self.nx):
-          xopt[i] = self.xconrevs[i].rev(xopt[i])
-
-    except:
-      print('Warning: Bayesian minimisation failed, choosing best sample in dataset')
-      yopt = np.min(self.y)
-      xopt = self.x[np.argmin(self.y[:,0]),:]
-
-
-    self.xopt = xopt
-    self.yopt = yopt
-
-    return xopt,yopt
 
   # Perform Bayesian optimisation
   def BO(self,opt_type='min',opt_method='predict',fit_method='map',max_iter=16,\
