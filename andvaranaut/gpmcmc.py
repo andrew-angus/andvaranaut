@@ -341,10 +341,6 @@ class GPMCMC(LHC):
               mpcheck = {str(ky):mp[str(ky)] for ky in m.cont_vars}
               logps = m.point_logps(point=mpcheck)
               logsum = np.sum(np.array([logps[str(ky)] for ky in logps.keys()]))
-              #print(start)
-              #print(logps)
-              #print(logsum)
-              #print('')
             except:
               print('Restart failed')
               logsum = maxl
@@ -953,23 +949,27 @@ class GPMCMC(LHC):
       ytest = ytest[:,0]
       ypred, yvars = self.__gh_stats(xtest,ypred,yvars,normvar=False)
       ypred = ypred[:,0]; yvars = yvars[:,0]
+      meany = np.mean(self.y)
     else: 
       xtest = xctest
       ytest = self.yconrevs[0].con(ytest[:,0]-ymtest[:,0])
+      meany = np.mean(self.yc)
 
     # RMSE for each y variable
     rmse = np.sqrt(np.mean(np.power(ypred-ytest,2)))
     mea = np.mean(np.abs(ypred-ytest))
     mpe = np.mean(np.abs(ypred-ytest)/np.abs(ytest))
+    r2 = 1-np.sum(np.power(ypred-ytest,2))/np.sum(np.power(ytest-meany,2))
     if self.verbose:
       print(f'RMSE for y is: {rmse:0.5e}')
       print(f'Mean absoulte error for y is: {mea:0.5e}')
       print(f'Mean percentage error for y is: {mpe:0.5%}')
+      print(f'R^2 for y is: {r2:0.5f}')
     # Compare ytest and predictions for each output variable
     if yplots:
       plt.plot(ytest,ytest,'-',label='True')
       if logscale:
-        plt.plot(ytest,ypred,'x',label='GP')
+        plt.plot(ytest,ypred,'o',label='GP')
         plt.xscale('log')
         plt.yscale('log')
       else:

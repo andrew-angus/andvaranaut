@@ -1,24 +1,16 @@
-MCMC
 Active subspaces
+Neural net 
+Dimensional reduction
 Conrev functionality inherited from class in utils.py
-Input file handler
-Folder cleanup
+NetCDF input and output
 Sensitivity analysis
-Cleanup adaptive sampler
+Adaptive sampler w. PyMC
 Pandas data visualisation
 Improved ray scheduling (In-code + sampling parallelism)
-Better use underlying package functionality with **kwargs
 Option to save plots rather than display
-Delta ML integration
 GP predict on original data
 Blank GP setup
-No printing option
-Post-processing GP inputs (needs some random sampling of intensity/domain size then converted to LW energy flux at a point?)
 Optionally set priors/xconrevs automatically within set_data
-Silence error messages on mkdir run directory
 Set data labels which are then propagated through plots etc.
-Hessian calc finite difference order option
 Proper docs ala scipy
 More/better test cases (automatic suite?)
-xopt updates to best result on multiple .opt() calls
-Julia wrapper - parallelism, slow bits, plotting; do speed comparison with just running in python
