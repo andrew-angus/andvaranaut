@@ -12,6 +12,7 @@ import copy
 from scipy.optimize import differential_evolution,NonlinearConstraint,minimize, Bounds
 from design import ihs
 import pytensor.tensor as pt
+from netCDF4 import *
 
 # Save and load with pickle
 # ToDo: Faster with cpickle 
@@ -22,6 +23,28 @@ def load_object(fname):
   with open(fname, 'rb') as f:
     obj = pickle.load(f)
   return obj
+
+# Save and load plot data netCDF
+def save_xy(x,y=None,fname='savexy.nc'):
+  f = Dataset(fname,'w')
+  n = f.createDimension('n',len(x))
+  xdat = f.createVariable('x','f8',('n'))
+  if y is not None:
+    ydat = f.createVariable('y','f8',('n'))
+    ydat[:] = y
+  xdat[:] = x
+  f.close()
+
+def load_xy(fname,xonly=False):
+  f = Dataset(fname,'r')
+  x = f.variables['x'][:]
+  if not xonly:
+    y = f.variables['y'][:]
+  f.close()
+  if not xonly:
+    return x,y
+  else:
+    return x
 
 # Core class which runs target function
 class _core():
