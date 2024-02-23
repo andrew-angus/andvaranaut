@@ -143,18 +143,10 @@ class GPMCMC(LHC):
     # Allow for use of surrogate evaluations or underlying datasets
     if surrogate:
       xsamps = super()._LHC__latin_sample(nsamps)
-      xcons = np.zeros((nsamps,self.nx))
-      for i in range(self.nx):
-        xcons[:,i] = self.xconrevs[i].con(xsamps[:,i])
-      ypreds = self.predict(xcons)
-      yrevs = np.zeros((nsamps,self.ny))
-      for i in range(self.ny):
-        yrevs[:,i] = self.yconrevs[i].rev(ypreds[:,i])
-      amax = np.argmax(ypreds)
-      idx = (amax//self.ny,amax%self.ny)
-      super()._LHC__y_dist(yrevs,mode)
+      ypreds = self.predict(xsamps)
+      super()._LHC__y_dist(ypreds,mode)
       if return_data:
-        return xsamps,yrevs
+        return xsamps,ypreds
     elif not surrogate:
       super().y_dist(mode)
     else:
@@ -173,7 +165,7 @@ class GPMCMC(LHC):
     xm,ym = self._core__vector_solver(self.x,self.mean)
     if len(xm) != len(self.x):
       raise Exception("Mean function not valid at every x point in dataset")
-    self.ym = np.r_[self.ym,ym]
+    self.ym = ym #TODO should not run solver for all x, only new samps
 
     # Get converted data
     self.__con(len(self.x))
@@ -974,7 +966,7 @@ class GPMCMC(LHC):
         plt.yscale('log')
       else:
         if errorbars:
-          plt.errorbar(ytest,ypred,fmt='x',yerr=np.sqrt(yvars),\
+          plt.errorbar(ytest,ypred,fmt='o',yerr=np.sqrt(yvars),\
               label='GP',capsize=3)
         else:
           plt.plot(ytest,ypred,'x',label='GP')
@@ -1001,14 +993,14 @@ class GPMCMC(LHC):
         #asort = np.argsort(xtest[:,j])
         plt.plot(xtest[:,j],ytest,'.',label='Test')
         if logscale:
-          plt.plot(xtest[:,j],ypred,'x',label='GP')
+          plt.plot(xtest[:,j],ypred,'o',label='GP')
           plt.yscale('log')
         else:
           if errorbars:
-            plt.errorbar(xtest[:,j],ypred,fmt='x',yerr=np.sqrt(yvars),\
+            plt.errorbar(xtest[:,j],ypred,fmt='o',yerr=np.sqrt(yvars),\
                 label='GP',capsize=3)
           else:
-            plt.plot(xtest[:,j],ypred,'x',label='GP')
+            plt.plot(xtest[:,j],ypred,'o',label='GP')
         plt.ylabel(f'y')
         plt.xlabel(f'x[{j}]')
         plt.legend()

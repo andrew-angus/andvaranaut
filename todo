@@ -10,7 +10,11 @@ Improved ray scheduling (In-code + sampling parallelism)
 Option to save plots rather than display
 GP predict on original data
 Blank GP setup
-Optionally set priors/xconrevs automatically within set_data
+Optionally set priors/xconrevs automatically with defaults
 Set data labels which are then propagated through plots etc.
 Proper docs ala scipy
 More/better test cases (automatic suite?)
+Multiple output support
+Sparse regression for large datasets
+Better evaluation of mean function after sampling
+Fix fitting with restarts
