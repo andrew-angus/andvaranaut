@@ -521,7 +521,7 @@ class GPMCMC(LHC):
     self.hypers = None
 
   # Standard predict method which wraps the pymc predict
-  def predict(self,x,return_var=False,convert=True,revert=True,normvar=True,jitter=1e-6,\
+  def predict(self,x,return_var=False,convert=True,revert=True,normvar=False,jitter=1e-6,\
       EI=False,EIopt=None,deg=8):
     if convert:
       xarg = np.zeros_like(x)
