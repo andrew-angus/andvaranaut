@@ -168,7 +168,10 @@ class GPMCMC(LHC):
     self.ym = ym #TODO should not run solver for all x, only new samps
 
     # Get converted data
-    self.__con(len(self.x))
+    self.xc = np.empty((0,self.nx))
+    self.yc = np.empty((0,self.ny))
+    self.nsamp = len(xm)
+    self.__con(self.nsamp)
 
   # Fit GP standard method
   def fit(self,method='map',return_data=False,\
@@ -929,8 +932,8 @@ class GPMCMC(LHC):
     # Train model on training set and make predictions on xtest data
     m, gp, hypers, data = self.__fit(xtrain,ytrain-ymtrain,\
         method,iwgp,cwgp)
-    if self.verbose:
-      print(hypers)
+    #if self.verbose:
+      #print(hypers)
     xctest = np.zeros_like(xtest)
     for i in range(self.nx):
       xctest[:,i] = self.xconrevs[i].con(xtest[:,i])
