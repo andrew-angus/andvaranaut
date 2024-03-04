@@ -23,7 +23,7 @@ setup(
   python_requires='>=3.6',
   install_requires=[
     "setuptools",
-    "pymc",
+    "pymc <= 5.9.2",
     "numpy",
     "scipy",
     "py-design",
