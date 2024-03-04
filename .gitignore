@@ -8,3 +8,4 @@ parallel
 *.pickle
 *.log
 build
+.virtual_documents
