@@ -26,7 +26,9 @@ To install run the following in the same directory as setup.py (can drop the --u
 
 ### Future
  
-- PCE surrogates  
+- PCE surrogates
+- Neural networks (NN)
+- NN autoencoding for GP surrogate  
 
 ## Tutorial
 
