@@ -4,7 +4,6 @@ import cloudpickle as pickle
 import numpy as np
 from functools import partial
 import scipy.stats as st
-import ray
 import multiprocessing as mp
 from time import time as stopwatch
 import os
@@ -95,50 +94,6 @@ class _core():
     if rundir is not None:
       self.rundir = rundir
 
-  # Method which takes function, and 2D array of inputs
-  # Then runs in parallel for each set of inputs
-  # Returning 2D array of outputs
-  def __parallel_runs(self,inps,fun):
-
-    # Run function in parallel in individual directories    
-    if not ray.is_initialized():
-      ray.init(num_cpus=self.nproc)
-    l = len(inps)
-    all_ids = [_parallel_wrap.remote(fun,self.rundir,inps[i],i+self.nsamp) for i in range(l)]
-
-    # Get ids as they complete or fail, give warning on fail
-    outs = []; fails = np.empty(0,dtype=np.intc)
-    id_order = np.empty(0,dtype=np.intc)
-    ids = copy.deepcopy(all_ids)
-    lold = l; flag = False
-    while lold:
-      done_id,ids = ray.wait(ids)
-      try:
-        outs += ray.get(done_id)
-        idx = all_ids.index(done_id[0]) 
-        id_order = np.append(id_order,idx)
-      except:
-        idx = all_ids.index(done_id[0]) 
-        id_order = np.append(id_order,idx)
-        fails = np.append(fails,idx)
-        flag = True
-        print(f"Warning: parallel run {idx+1} failed with x values {inps[idx]}.",\
-          "\nCheck number of inputs/outputs and whether input ranges are valid.")
-      lnew = len(ids)
-      if lnew != lold:
-        lold = lnew
-        if self.verbose:
-          print(f'Run is {(l-lold)/l:0.1%} complete.',end='\r')
-    if flag:
-      ray.shutdown()
-    
-    # Reshape outputs to 2D array
-    oldouts = np.array(outs).reshape((len(outs),self.ny))
-    outs = np.zeros_like(oldouts)
-    outs[id_order] = oldouts
-
-    return outs, fails
-
   # Private method which takes array of x samples and evaluates y at each
   def __vector_solver(self,xsamps,fun=None):
     if fun is None:
@@ -148,41 +103,37 @@ class _core():
     # Create directory for tasks
     if not os.path.isdir(self.rundir):
       os.mkdir(self.rundir)
-    # Parallel execution using ray
-    if self.parallel:
-      ysamps,fails = self.__parallel_runs(xsamps,fun)
-      assert ysamps.shape[1] == self.ny, "Specified ny does not match function output"
+
     # Serial execution
-    else:
-      ysamps = np.empty((0,self.ny))
-      fails = np.empty(0,dtype=np.intc)
-      for i in range(n_samples):
-        d = os.path.join(self.rundir, f'task{i+self.nsamp}')
-        if not os.path.isdir(d):
-          os.system(f'mkdir {d}')
-        os.chdir(d)
-        # Keep track of fails but run rest of samples
-        try:
-          yout = fun(xsamps[i,:])
-        except:
-          errstr = f"Warning: Target function evaluation failed at sample {i+1} "+\
-              "with x values: " +str(xsamps[i,:])+\
-              "\nCheck number of inputs and range of input values valid."
-          print(errstr)
-          fails = np.append(fails,i)
-          os.chdir('../..')
-          continue
-
-
-        # Number of function outputs check and append samples
-        try:
-          ysamps = np.vstack((ysamps,yout))
-        except:
-          os.chdir('../..')
-          raise Exception("Error: number of target function outputs is not equal to ny")
+    ysamps = np.empty((0,self.ny))
+    fails = np.empty(0,dtype=np.intc)
+    for i in range(n_samples):
+      d = os.path.join(self.rundir, f'task{i+self.nsamp}')
+      if not os.path.isdir(d):
+        os.system(f'mkdir {d}')
+      os.chdir(d)
+      # Keep track of fails but run rest of samples
+      try:
+        yout = fun(xsamps[i,:])
+      except:
+        errstr = f"Warning: Target function evaluation failed at sample {i+1} "+\
+            "with x values: " +str(xsamps[i,:])+\
+            "\nCheck number of inputs and range of input values valid."
+        print(errstr)
+        fails = np.append(fails,i)
         os.chdir('../..')
-        if self.verbose:
-          print(f'Run is {(i+1)/n_samples:0.1%} complete.',end='\r')
+        continue
+
+
+      # Number of function outputs check and append samples
+      try:
+        ysamps = np.vstack((ysamps,yout))
+      except:
+        os.chdir('../..')
+        raise Exception("Error: number of target function outputs is not equal to ny")
+      os.chdir('../..')
+      if self.verbose:
+        print(f'Run is {(i+1)/n_samples:0.1%} complete.',end='\r')
     t1 = stopwatch()
 
     # Remove failed samples
@@ -273,25 +224,12 @@ class _core():
           npoints = len(points)
 
       # Conduct minimisations
-      if self.parallel:
-        if not ray.is_initialized():
-          ray.init(num_cpus=self.nproc)
-        # Switch off further parallelism within minimized function
-        self.parallel = False
-        try:
-          results = ray.get([_minimize_wrap.remote(fun,i,**kwargs) for i in points])
-          self.parallel = True
-        except:
-          self.parallel = True
-          ray.shutdown()
-          raise Exception
-      else:
-        results = []
-        for i in points:
-          with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            res = minimize(fun,i,**kwargs)
-          results.append(res)
+      results = []
+      for i in points:
+        with warnings.catch_warnings():
+          warnings.simplefilter("ignore")
+          res = minimize(fun,i,**kwargs)
+        results.append(res)
 
       # Get best result
       f_vals = np.array([i.fun for i in results])
@@ -395,21 +333,3 @@ class _core():
         res[i,j] = self.__derivative(x,div,j,eps)
         res[j,i] = res[i,j]
     return res 
-
-
-# Function which wraps serial function for executing in parallel directories
-@ray.remote(max_retries=0)
-def _parallel_wrap(fun,rundir,inp,idx):
-  d = os.path.join(rundir, f'task{idx}')
-  if not os.path.isdir(d):
-    os.mkdir(d)
-  os.chdir(d)
-  res = fun(inp)
-  os.chdir('../..')
-  return res
- 
-# Function which wraps serial function for executing in parallel directories
-@ray.remote(max_retries=0)
-def _minimize_wrap(fun,x0,**kwargs):
-  res = minimize(fun,x0,method='SLSQP',**kwargs)
-  return res

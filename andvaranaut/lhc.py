@@ -1,7 +1,6 @@
 #!/bin/python3
 
 import numpy as np
-#from design import latin_random,ihs
 import scipy.stats as st
 from time import time as stopwatch
 import seaborn as sns
@@ -10,7 +9,6 @@ import os
 import copy
 from functools import partial
 from andvaranaut.core import _core
-import ray
 from matplotlib import ticker
 from netCDF4 import *
 from scipy.stats import qmc
