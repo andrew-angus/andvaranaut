@@ -1,7 +1,7 @@
 #!/bin/python3
 
 import numpy as np
-from design import latin_random,ihs
+#from design import latin_random,ihs
 import scipy.stats as st
 from time import time as stopwatch
 import seaborn as sns
@@ -13,6 +13,7 @@ from andvaranaut.core import _core
 import ray
 from matplotlib import ticker
 from netCDF4 import *
+from scipy.stats import qmc
 
 # Latin hypercube sampler and propagator, inherits core
 class LHC(_core):
@@ -22,12 +23,12 @@ class LHC(_core):
     self.y = np.empty((0,self.ny))
 
   # Add n samples to current via latin hypercube sampling
-  def sample(self,nsamps,seed=None,improved=False):
+  def sample(self,nsamps,seed=None):
     if not isinstance(nsamps,int) or (nsamps < 1):
       raise Exception("Error: nsamps argument must be an integer > 0") 
     if self.verbose:
       print(f'Evaluating {nsamps} latin hypercube samples...')
-    xsamps = self.__latin_sample(nsamps,seed,improved)
+    xsamps = self.__latin_sample(nsamps,seed)
     if self.constraints is not None:
       xsamps = self._core__check_constraints(xsamps)
     xsamps,ysamps = self._core__vector_solver(xsamps)
@@ -38,14 +39,10 @@ class LHC(_core):
     self.nsamp = len(self.x)
 
   # Produce latin hypercube samples from input distributions
-  def __latin_sample(self,nsamps,seed=None,improved=False):
-    if improved:
-      if seed:
-        np.random.seed(seed)
-      points = (ihs(nsamps,self.nx,seed)\
-          -1.0+np.random.rand(nsamps,self.nx))/nsamps
-    else:
-      points = latin_random(nsamps,self.nx,seed)
+  def __latin_sample(self,nsamps,seed=None):
+    #points = latin_random(nsamps,self.nx,seed)
+    sampler = qmc.LatinHypercube(d=self.nx,optimization="random-cd")
+    points = sampler.random(n=nsamps)
     xsamps = np.zeros_like(points)
     for j in range(self.nx):
       xsamps[:,j] = self.priors[j].ppf(points[:,j])

@@ -1,7 +1,6 @@
 #!/bin/python3
 
 import numpy as np
-from design import latin_random,ihs
 import scipy.stats as st
 from time import time as stopwatch
 import matplotlib.pyplot as plt
@@ -157,9 +156,9 @@ class GPMCMC(LHC):
     self.test = None
 
   # Sample method inherits lhc sampling and adds adaptive sampling option
-  def sample(self,nsamps,seed=None,improved=False):
+  def sample(self,nsamps,seed=None):
     # Evaluate samples
-    super().sample(nsamps=nsamps,seed=seed,improved=improved)
+    super().sample(nsamps=nsamps,seed=seed)
 
     # Evaluate mean function
     xm,ym = self._core__vector_solver(self.x,self.mean)

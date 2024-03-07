@@ -26,7 +26,6 @@ setup(
     "pymc <= 5.9.2",
     "numpy",
     "scipy",
-    "py-design",
     "ray",
     "scikit-learn",
     "seaborn",

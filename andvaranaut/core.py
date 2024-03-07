@@ -10,7 +10,8 @@ from time import time as stopwatch
 import os
 import copy
 from scipy.optimize import differential_evolution,NonlinearConstraint,minimize, Bounds
-from design import ihs
+#from design import ihs
+from scipy.stats import qmc
 import pytensor.tensor as pt
 from netCDF4 import *
 
@@ -247,8 +248,10 @@ class _core():
           i.lb += buff
           i.ub -= buff
       # Draw starting point samples
-      points = (ihs(restarts,nx)\
-          -1.0+np.random.rand(restarts,nx))/restarts
+      sampler = qmc.LatinHypercube(d=nx,optimization="random-cd")
+      points = sampler.random(n=restarts)
+      #points = (ihs(restarts,nx)\
+      #    -1.0+np.random.rand(restarts,nx))/restarts
       # Scale by bounds or priors
       if priors is not None:
         for j in range(nx):
