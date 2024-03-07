@@ -31,5 +31,6 @@ setup(
     "scikit-learn",
     "seaborn",
     "cloudpickle",
+    "netCDF4"
     ],
 )
