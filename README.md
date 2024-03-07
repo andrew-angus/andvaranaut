@@ -17,7 +17,6 @@ To install run the following in the same directory as setup.py (can drop the --u
 - Parallel target function execution   
 - Input \& output transformations   
 - Gaussian process (GP) surrogates   
-- GP adaptive sampling
 - Inverse Bayesian problems via maximum a posteriori (MAP) or Markov chain Monte Carlo (MCMC)
 - GP hyperparameter optimisation via MAP or MCMC
 - Hyperparameter optimisation optionally includes those necessary for complex multi-layered input and output transformations
@@ -28,7 +27,8 @@ To install run the following in the same directory as setup.py (can drop the --u
  
 - PCE surrogates
 - Neural networks (NN)
-- NN autoencoding for GP surrogate  
+- NN autoencoding for GP surrogate
+- GP adaptive sampling  
 
 ## Tutorial
 
