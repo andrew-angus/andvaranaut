@@ -4,7 +4,8 @@ Dimensional reduction
 Conrev functionality inherited from class in utils.py
 NetCDF input and output
 Sensitivity analysis
-Adaptive sampler w. PyMC
+Adaptive sampler
+Replace pymc with gpytorch
 Pandas data visualisation
 Replace ray with dask
 - integrate with pandas

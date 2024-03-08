@@ -626,7 +626,7 @@ class GPMCMC(LHC):
     for i in range(max_iter):
 
       if self.verbose:
-        print(f'Iteration {i}')
+        print(f'Iteration {i+1}')
 
       if opt_method == 'DE' or opt_method == 'predict':
 
