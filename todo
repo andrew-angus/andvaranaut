@@ -6,7 +6,9 @@ NetCDF input and output
 Sensitivity analysis
 Adaptive sampler w. PyMC
 Pandas data visualisation
-Improved ray scheduling (In-code + sampling parallelism)
+Replace ray with dask
+- integrate with pandas
+- improve behaviour on sample failure
 Option to save plots rather than display
 GP predict on original data
 Blank GP setup
