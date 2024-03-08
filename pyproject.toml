@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools >= 61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "andvaranaut"
+version = "1.0.0"
+authors = [
+  {name = "Andrew Angus", email = "andrewangus27@gmail.com"},
+]
+description = "Predictive modelling and UQ suite."
+readme = "README.md"
+license = {file="LICENSE"}
+requires-python = '>=3.8'
+dependencies = [
+  "pymc <= 5.9.2",
+  "numpy",
+  "scipy",
+  "dask",
+  "distributed",
+  "scikit-learn",
+  "seaborn",
+  "cloudpickle",
+  "netCDF4"
+]
+
+[project.urls]
+Repository = "https://github.com/andrew-angus/andvaranaut.git"
+
+[tool.setuptools]
+packages = ["andvaranaut"]
