@@ -14,3 +14,4 @@ More/better test cases (automatic suite?)
 Multiple output support
 Sparse regression for large datasets
 Better evaluation of mean function after sampling
+Constrained sampling and optimisation with GPMCMC
