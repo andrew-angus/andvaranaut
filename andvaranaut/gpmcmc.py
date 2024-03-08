@@ -585,7 +585,7 @@ class GPMCMC(LHC):
   # Perform Bayesian optimisation
   def BO(self,opt_type='min',opt_method='predict',fit_method='map',max_iter=16,\
       method='EI',eps=0.1,iwgp=False,cwgp=False,jitter=1e-6,conv=0.01,\
-      predict_samps=100000,normvar=True,refine=True,**kwargs):
+      predict_samps=10000,normvar=True,refine=True,**kwargs):
 
 
     if self.ny > 1:
@@ -1171,13 +1171,3 @@ class GPMCMC(LHC):
     else:
       xopt = xopt[0,:]
       return data, xopt
-
-
-  """
-
-  def portable_save(self,fname):
-    pg = copy.deepcopy(self)
-    pg.target = None
-    pg.constraints = None
-    save_object(pg,fname)
-  """
