@@ -11,7 +11,6 @@ from functools import partial
 from andvaranaut.core import _core,save_object
 from andvaranaut.lhc import LHC
 from andvaranaut.transform import wgp,kumaraswamy
-import ray
 import pymc as pm
 import arviz as az
 import pytensor.tensor as pt

@@ -4,16 +4,17 @@ import cloudpickle as pickle
 import numpy as np
 from functools import partial
 import scipy.stats as st
-import ray
+import dask
+from dask.distributed import Client
 import multiprocessing as mp
 from time import time as stopwatch
 import os
 import copy
 from scipy.optimize import differential_evolution,NonlinearConstraint,minimize, Bounds
-#from design import ihs
 from scipy.stats import qmc
 import pytensor.tensor as pt
 from netCDF4 import *
+from time import sleep
 
 # Save and load with pickle
 # ToDo: Faster with cpickle 
@@ -50,7 +51,7 @@ def load_xy(fname,xonly=False):
 # Core class which runs target function
 class _core():
   def __init__(self,nx,ny,priors,target,parallel=False,nproc=1,\
-      constraints=None,rundir=None,verbose=False):
+      constraints=None,rundir=None,verbose=False,pulse=1):
     # Check inputs
     if (not isinstance(nx,int)) or (nx < 1):
       raise Exception('Error: must specify an integer number of input dimensions > 0') 
@@ -88,6 +89,7 @@ class _core():
     self.target = target # Target function which takes X and returns Y
     self.parallel = parallel # Whether to use parallelism wherever possible
     self.nproc = nproc # Number of processors to use if using parallelism
+    self.pulse = pulse # Seconds to check parallel task completion
     self.constraints = constraints # List of constraint functions for sampler
     self.verbose = verbose
     self.rundir = 'runs'
@@ -101,41 +103,31 @@ class _core():
   def __parallel_runs(self,inps,fun):
 
     # Run function in parallel in individual directories    
-    if not ray.is_initialized():
-      ray.init(num_cpus=self.nproc)
-    l = len(inps)
-    all_ids = [_parallel_wrap.remote(fun,self.rundir,inps[i],i+self.nsamp) for i in range(l)]
+    # with dask client
+    with Client(n_workers=self.nproc,threads_per_worker=1) as client:
 
-    # Get ids as they complete or fail, give warning on fail
-    outs = []; fails = np.empty(0,dtype=np.intc)
-    id_order = np.empty(0,dtype=np.intc)
-    ids = copy.deepcopy(all_ids)
-    lold = l; flag = False
-    while lold:
-      done_id,ids = ray.wait(ids)
-      try:
-        outs += ray.get(done_id)
-        idx = all_ids.index(done_id[0]) 
-        id_order = np.append(id_order,idx)
-      except:
-        idx = all_ids.index(done_id[0]) 
-        id_order = np.append(id_order,idx)
-        fails = np.append(fails,idx)
-        flag = True
-        print(f"Warning: parallel run {idx+1} failed with x values {inps[idx]}.",\
-          "\nCheck number of inputs/outputs and whether input ranges are valid.")
-      lnew = len(ids)
-      if lnew != lold:
-        lold = lnew
-        if self.verbose:
-          print(f'Run is {(l-lold)/l:0.1%} complete.',end='\r')
-    if flag:
-      ray.shutdown()
-    
-    # Reshape outputs to 2D array
-    oldouts = np.array(outs).reshape((len(outs),self.ny))
-    outs = np.zeros_like(oldouts)
-    outs[id_order] = oldouts
+      # Start tasks and initialise output arrays
+      l = len(inps)
+      futures = [client.submit(_parallel_wrap,fun=fun,rundir=self.rundir, \
+          inp=inps[i],idx=i+self.nsamp) for i in range(l)]
+      outs = np.empty((0,self.ny))
+      fails = np.empty(0,dtype=np.intc)
+      
+      # Check for completed tasks at pulse interval and handle errors
+      unfinished = np.arange(l)
+      while len(unfinished) > 0:
+        sleep(self.pulse)
+        for i in unfinished:
+          status = futures[i].status
+          # Save results of finished tasks
+          if status == 'finished':
+            result = futures[i].result()
+            outs = np.r_[outs,np.array([result])]
+            unfinished = np.delete(unfinished,np.where(unfinished == i))
+          # Save sample id of failed tasks
+          elif status == 'error':
+            fails = np.append(fails,i)
+            unfinished = np.delete(unfinished,np.where(unfinished == i))
 
     return outs, fails
 
@@ -148,7 +140,7 @@ class _core():
     # Create directory for tasks
     if not os.path.isdir(self.rundir):
       os.mkdir(self.rundir)
-    # Parallel execution using ray
+    # Parallel execution using dask
     if self.parallel:
       ysamps,fails = self.__parallel_runs(xsamps,fun)
       assert ysamps.shape[1] == self.ny, "Specified ny does not match function output"
@@ -165,10 +157,6 @@ class _core():
         try:
           yout = fun(xsamps[i,:])
         except:
-          errstr = f"Warning: Target function evaluation failed at sample {i+1} "+\
-              "with x values: " +str(xsamps[i,:])+\
-              "\nCheck number of inputs and range of input values valid."
-          print(errstr)
           fails = np.append(fails,i)
           os.chdir('../..')
           continue
@@ -186,6 +174,10 @@ class _core():
     t1 = stopwatch()
 
     # Remove failed samples
+    for i in fails:
+      errstr = f"Warning: Target function evaluation failed at sample {i} "+\
+          "with x values: " +str(xsamps[i,:]) 
+      print(errstr)
     mask = np.ones(n_samples, dtype=bool)
     mask[fails] = False
     xsamps = xsamps[mask]
@@ -274,17 +266,32 @@ class _core():
 
       # Conduct minimisations
       if self.parallel:
-        if not ray.is_initialized():
-          ray.init(num_cpus=self.nproc)
-        # Switch off further parallelism within minimized function
-        self.parallel = False
-        try:
-          results = ray.get([_minimize_wrap.remote(fun,i,**kwargs) for i in points])
-          self.parallel = True
-        except:
-          self.parallel = True
-          ray.shutdown()
-          raise Exception
+        # Run function in parallel with dask client
+        with Client(n_workers=self.nproc,threads_per_worker=1) as client:
+
+          # Start tasks and initialise output arrays
+          l = len(points)
+          futures = [client.submit(minimize,fun=fun,x0=i,**kwargs) for i in points]
+          outs = []
+          fails = np.empty(0,dtype=np.intc)
+          
+          # Check for completed tasks at pulse interval and handle errors
+          unfinished = np.arange(l)
+          while len(unfinished) > 0:
+            sleep(self.pulse)
+            for i in unfinished:
+              status = futures[i].status
+              # Save results of finished tasks
+              if status == 'finished':
+                result = futures[i].result()
+                outs.append(result)
+                unfinished = np.delete(unfinished,np.where(unfinished == i))
+              # Save sample id of failed tasks
+              elif status == 'error':
+                fails = np.append(fails,i)
+                unfinished = np.delete(unfinished,np.where(unfinished == i))
+          if self.verbose:
+            print(f'{len(fails)} minimisations returned exceptions.')
       else:
         results = []
         for i in points:
@@ -398,7 +405,6 @@ class _core():
 
 
 # Function which wraps serial function for executing in parallel directories
-@ray.remote(max_retries=0)
 def _parallel_wrap(fun,rundir,inp,idx):
   d = os.path.join(rundir, f'task{idx}')
   if not os.path.isdir(d):
@@ -406,10 +412,4 @@ def _parallel_wrap(fun,rundir,inp,idx):
   os.chdir(d)
   res = fun(inp)
   os.chdir('../..')
-  return res
- 
-# Function which wraps serial function for executing in parallel directories
-@ray.remote(max_retries=0)
-def _minimize_wrap(fun,x0,**kwargs):
-  res = minimize(fun,x0,method='SLSQP',**kwargs)
   return res

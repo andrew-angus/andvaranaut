@@ -1,23 +1,16 @@
 Active subspaces
-Neural net 
+Fix latest pymc version breakages
+Neural network within pymc 
 Dimensional reduction
-Conrev functionality inherited from class in utils.py
 NetCDF input and output
 Sensitivity analysis
 Adaptive sampler
-Replace pymc with gpytorch
-Pandas data visualisation
-Replace ray with dask
-- integrate with pandas
-- improve behaviour on sample failure
+Pandas integration - labelled data
 Option to save plots rather than display
-GP predict on original data
 Blank GP setup
 Optionally set priors/xconrevs automatically with defaults
-Set data labels which are then propagated through plots etc.
 Proper docs ala scipy
 More/better test cases (automatic suite?)
 Multiple output support
 Sparse regression for large datasets
 Better evaluation of mean function after sampling
-Fix fitting with restarts
