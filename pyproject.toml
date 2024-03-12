@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools >= 61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
 
 [project]
 name = "andvaranaut"
@@ -26,6 +26,3 @@ dependencies = [
 
 [project.urls]
 Repository = "https://github.com/andrew-angus/andvaranaut.git"
-
-[tool.setuptools]
-packages = ["andvaranaut"]
