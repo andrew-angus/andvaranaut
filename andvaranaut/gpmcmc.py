@@ -568,6 +568,22 @@ class GPMCMC(LHC):
 
     return y, yv
 
+  # Get mean and variance of converted variable by Gauss-Hermite quadrature
+  #TODO Make this and MCMC procedure compatible with non-zero mean function
+  def __gh_stats_inv(self,y,yv,deg=8):
+
+    # Reversion
+    xi,wi = np.polynomial.hermite.hermgauss(deg)
+    for i in range(len(y)):
+      yi = np.sqrt(2*yv[i,0])*xi+y[i,0]
+      yir = self.yconrevs[0].con(yi)
+      ym = 1/np.sqrt(np.pi)*np.sum(wi*yir)
+      yir2 = np.power(yir,2)
+      ym2 = 1/np.sqrt(np.pi)*np.sum(wi*yir2)
+      yvcon = ym2-ym**2
+
+    return yvcon
+
   # Private predict method with more flexibility to act on any provided model
   def __predict(self,m,gp,hyps,x,jitter=1e-6):
     if self.verbose:
@@ -1021,7 +1037,7 @@ class GPMCMC(LHC):
     plt.show()
 
   # Fit GP with inverse optimisation
-  def inverse_opt(self,yobs,\
+  def inverse_opt(self,yobs,yvarobs=None,\
       method='map',evaluate_opt=False,jitter=1e-6,**kwargs):
 
     if self.m is None:
@@ -1079,10 +1095,11 @@ class GPMCMC(LHC):
         priors.append(prior)
 
       # Convert x inputs
-      xin = pt.zeros((self.nsamp+1,self.nx))
-      xin = pt.set_subtensor(xin[:-1,:],self.xc)
+      nobs = len(yobs)
+      xin = pt.zeros((self.nsamp+nobs,self.nx))
+      xin = pt.set_subtensor(xin[:-nobs,:],self.xc)
       for j in range(self.nx):
-        xin = pt.set_subtensor(xin[-1,j],\
+        xin = pt.set_subtensor(xin[-nobs:,j],\
             self.xconrevs[j].conmc(priors[j]))
 
       # Establish kernel
@@ -1113,21 +1130,36 @@ class GPMCMC(LHC):
           kern *= kerni
 
       # Set y vector
-      yin = np.zeros(self.nsamp+1)
-      yin[:-1] = self.yc[:,0]
-      yin[-1] = self.yconrevs[0].con(yobs)
+      yin = np.zeros(self.nsamp+nobs)
+      yin[:-nobs] = self.yc[:,0]
+      yin[-nobs:] = self.yconrevs[0].con(yobs)
+
+      # Set y noise vector
+      ynoise = np.zeros(self.nsamp+nobs)
+      if self.noise:
+        ynoise[:-nobs] = np.sqrt(self.hypers['gv']+jitter)
+      else:
+        ynoise[:-nobs] = np.sqrt(jitter)
+      if yvarobs is None:
+        if self.noise:
+          ynoise[:-nobs] = np.sqrt(self.hypers['gv']+jitter)
+        else:
+          ynoise[:-nobs] = np.sqrt(jitter)
+      else:
+        ynoise[-nobs:] = np.sqrt(self.__gh_stats_inv(yobs,yvarobs))
 
       # Get y derivative
-      yfull = np.r_[self.y[:,0],np.array([yobs])]
+      yfull = np.r_[self.y[:,0],yobs[:,0]]
       yder = self.yconrevs[0].der(yfull)
 
       # Evaluate likelihood
       nsamp = len(yin)
       K = kern(xin)
-      if self.noise:
-        K += pt.identity_like(K)*(jitter+self.hypers['gv'])
-      else:
-        K += pt.identity_like(K)*jitter
+      #if self.noise:
+      #  K += pt.identity_like(K)*(jitter+self.hypers['gv'])
+      #else:
+      #  K += pt.identity_like(K)*jitter
+      K += pt.diag(ynoise)
       L = pt.slinalg.cholesky(K)
       beta = pt.slinalg.solve_triangular(L,yin,lower=True)
       alpha = pt.slinalg.solve_triangular(L.T,beta)
