@@ -15,9 +15,9 @@ from scipy.stats import qmc
 import pytensor.tensor as pt
 from netCDF4 import *
 from time import sleep
+from tqdm import trange
 
-# Save and load with pickle
-# ToDo: Faster with cpickle 
+# Save and load with cloudpickle
 def save_object(obj,fname):
   with open(fname, 'wb') as f:
     pickle.dump(obj, f)
@@ -37,6 +37,7 @@ def save_xy(x,y=None,fname='savexy.nc'):
   xdat[:] = x
   f.close()
 
+# Load netCDF saved xy-data
 def load_xy(fname,xonly=False):
   f = Dataset(fname,'r')
   x = f.variables['x'][:]
@@ -51,7 +52,8 @@ def load_xy(fname,xonly=False):
 # Core class which runs target function
 class _core():
   def __init__(self,nx,ny,priors,target,parallel=False,nproc=1,\
-      constraints=None,rundir=None,verbose=False,pulse=1):
+      constraints=None,rundir=None,verbose=True,pulse=1):
+
     # Check inputs
     if (not isinstance(nx,int)) or (nx < 1):
       raise Exception('Error: must specify an integer number of input dimensions > 0') 
@@ -155,7 +157,12 @@ class _core():
     else:
       ysamps = np.empty((0,self.ny))
       fails = np.empty(0,dtype=np.intc)
-      for i in range(n_samples):
+      # Progress bar if verbose
+      if self.verbose:
+        rangef = trange
+      else:
+        rangef = range
+      for i in rangef(n_samples):
         d = os.path.join(self.rundir, f'task{i+self.nsamp}')
         if not os.path.isdir(d):
           os.system(f'mkdir {d}')
@@ -180,8 +187,6 @@ class _core():
           os.chdir('../..')
           raise Exception("Error: number of target function outputs is not equal to ny")
         os.chdir('../..')
-        if self.verbose:
-          print(f'Run is {(i+1)/n_samples:0.1%} complete.',end='\r')
     t1 = stopwatch()
 
     # Remove failed samples

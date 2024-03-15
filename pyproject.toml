@@ -21,7 +21,8 @@ dependencies = [
   "scikit-learn",
   "seaborn",
   "cloudpickle",
-  "netCDF4"
+  "netCDF4",
+  "tqdm"
 ]
 
 [project.urls]
