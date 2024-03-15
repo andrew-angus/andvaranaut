@@ -1155,10 +1155,6 @@ class GPMCMC(LHC):
       # Evaluate likelihood
       nsamp = len(yin)
       K = kern(xin)
-      #if self.noise:
-      #  K += pt.identity_like(K)*(jitter+self.hypers['gv'])
-      #else:
-      #  K += pt.identity_like(K)*jitter
       K += pt.diag(ynoise)
       L = pt.slinalg.cholesky(K)
       beta = pt.slinalg.solve_triangular(L,yin,lower=True)

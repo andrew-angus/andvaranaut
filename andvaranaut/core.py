@@ -137,13 +137,20 @@ class _core():
       fun = self.target
     t0 = stopwatch()
     n_samples = len(xsamps)
+
     # Create directory for tasks
     if not os.path.isdir(self.rundir):
       os.mkdir(self.rundir)
+
     # Parallel execution using dask
     if self.parallel:
       ysamps,fails = self.__parallel_runs(xsamps,fun)
       assert ysamps.shape[1] == self.ny, "Specified ny does not match function output"
+      for i in fails:
+        errstr = f"Warning: Target function evaluation failed at sample {i} "+\
+            "with x values: " +str(xsamps[i,:]) 
+        print(errstr)
+
     # Serial execution
     else:
       ysamps = np.empty((0,self.ny))
@@ -156,7 +163,11 @@ class _core():
         # Keep track of fails but run rest of samples
         try:
           yout = fun(xsamps[i,:])
-        except:
+        except Exception as e:
+          errstr = f"Warning: Target function evaluation failed at sample {i} "+\
+              "with x values: " +str(xsamps[i,:]) + "; error message: " 
+          errstr = errstr + str(e)
+          print(errstr)
           fails = np.append(fails,i)
           os.chdir('../..')
           continue
@@ -174,10 +185,6 @@ class _core():
     t1 = stopwatch()
 
     # Remove failed samples
-    for i in fails:
-      errstr = f"Warning: Target function evaluation failed at sample {i} "+\
-          "with x values: " +str(xsamps[i,:]) 
-      print(errstr)
     mask = np.ones(n_samples, dtype=bool)
     mask[fails] = False
     xsamps = xsamps[mask]
