@@ -137,16 +137,16 @@ class GPMCMC(LHC):
     self.__scrub_train_test()
 
   # Inherit and extend y_dist to have dist by surrogate predictions
-  def y_dist(self,mode='hist_kde',nsamps=None,return_data=False,surrogate=True):
+  def y_dist(self,mode='hist_kde',nsamps=None,return_data=False,surrogate=True,**kwargs):
     # Allow for use of surrogate evaluations or underlying datasets
     if surrogate:
       xsamps = super()._LHC__latin_sample(nsamps)
       ypreds = self.predict(xsamps)
-      super()._LHC__y_dist(ypreds,mode)
+      super()._LHC__y_dist(ypreds,mode,**kwargs)
       if return_data:
         return xsamps,ypreds
     elif not surrogate:
-      super().y_dist(mode)
+      super().y_dist(mode,**kwargs)
     else:
       raise Exception("Error: surrogate argument must be of type bool")
 
@@ -706,25 +706,42 @@ class GPMCMC(LHC):
           priors = []
           for k,j in enumerate(self.priors):
             if isinstance(j.dist,uniform_gen):
-              if len(j.args) >= 2:
-                prior = pm.Uniform(f'x{k}',lower=j.args[0],\
-                    upper=j.args[0]+j.args[1])
-              elif len(j.args) == 1:
-                prior = pm.Uniform(f'x{k}',lower=j.args[0],\
-                    upper=j.args[0]+j.kwds['scale'])
-              else:
-                prior = pm.Uniform(f'x{k}',lower=j.kwds['loc'],\
-                    upper=j.kwds['loc']+j.kwds['scale'])
+              intvl = j.support()
+              prior = pm.Uniform(f'x{k}', lower=intvl[0], upper=intvl[1])
             elif isinstance(j.dist,norm_gen):
-              if len(j.args) >= 2:
-                prior = pm.Normal(f'x{k}',mu=j.args[0],\
-                    sigma=j.args[1])
-              elif len(j.args) == 1:
-                prior = pm.Normal(f'x{k}',mu=j.args[0],\
-                    sigma=j.kwds['scale'])
-              else:
-                prior = pm.Normal(f'x{k}',mu=j.kwds['loc'],\
-                    sigma=j.kwds['scale'])
+              prior = pm.Normal(f'x{k}', mu=j.mean(), sigma=j.std())
+            elif isinstance(j.dist,truncnorm_gen):
+              intvl = j.support()
+              args = j.args
+              kwds = j.kwds
+              numkeys = len(kwds)
+              numargs = len(args)
+              if numargs == 4:
+                mu = args[2]
+                sigma = args[3]
+              elif numargs == 3:
+                mu = args[2]
+                if 'scale' in kwds:
+                  sigma = kwds['scale']
+                else:
+                  sigma = 1
+              elif numkeys == 4:
+                mu = kwds['loc']
+                sigma = kwds['scale']
+              elif numkeys+numargs == 2:
+                mu = 0
+                sigma = 1
+              elif 'b' in kwds or numargs == 2:
+                if 'loc' in kwds:
+                  mu = kwds['loc']
+                else:
+                  mu = 0
+                if 'scale' in kwds:
+                  sigma = kwds['scale']
+                else:
+                  sigma = 1
+              prior = pm.TruncatedNormal(f'x{k}',mu=mu,sigma=sigma, \
+                  lower=intvl[0], upper=intvl[1])
             else:
               raise Exception('Prior distribution conversion from scipy to pymc not implemented')
             priors.append(prior)
