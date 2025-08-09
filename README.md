@@ -2,6 +2,8 @@
 
 Predictive modelling and uncertainty quantification (UQ) suite. Use requires provision of target function which takes inputs and returns quantity of interest. In addition, probability distributions (from scipy.stats) for input variables should be specified if using sampling, along with optional input/output conversion methods (e.g bounded to unbounded range) for more performant machine learning surrogates.
 
+Use of this software for research should be acknowledged by citing: https://doi.org/10.1016/j.jcomc.2025.100630
+
 Name backstory: https://en.wikipedia.org/wiki/Andvaranaut
 
 To install run the following in the same directory as setup.py (can drop the --user flag if root):  
